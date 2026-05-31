@@ -131,12 +131,39 @@ def canonicalize_briefing_to_text(briefing_dict: Dict[str, Any]) -> str:
 
 def force_json(llm_output: Any) -> Dict:
     content_str = llm_output.content if hasattr(llm_output, 'content') else str(llm_output)
+
+    # Estratégia 1: bloco ```json ... ```
     match = re.search(r"```json\s*([\s\S]*?)\s*```", content_str)
-    json_str = match.group(1) if match else content_str
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # Estratégia 2: qualquer bloco de código ``` ... ```
+    match = re.search(r"```\s*([\s\S]*?)\s*```", content_str)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # Estratégia 3: extrai o maior bloco { ... } do texto
+    match = re.search(r"\{[\s\S]*\}", content_str)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    # Estratégia 4: tenta o texto completo limpo
     try:
-        return json.loads(json_str)
+        return json.loads(content_str.strip())
     except json.JSONDecodeError:
-        return {"error": "Falha ao decodificar JSON", "raw_content": json_str}
+        pass
+
+    # Fallback: retorna o texto bruto para debug
+    return {"error": "Falha ao decodificar JSON", "raw_content": content_str[:500]}
 
 # Inicialização de Modelos
 llm = ChatGoogleGenerativeAI(model=GEMINI_MODEL, temperature=TEMPERATURE)
@@ -209,8 +236,11 @@ def node_consolidador(state: AgentState) -> Dict[str, Any]:
 def node_adaptacao_canais(state: AgentState) -> Dict[str, Any]:
     st.write(f"🔄 *Adaptador de Canais:* Escrevendo as copys (Tentativa {state.get('tentativas_refinamento', 0) + 1})...")
     contexto = state.get('contexto_enriquecido', '{}')
-    if 'error' in json.loads(contexto):
-        return {"copy_por_canal": {"error": "Geração interrompida."}}
+    try:
+        if 'error' in json.loads(contexto):
+            return {"copy_por_canal": {"error": "Geração interrompida."}}
+    except (json.JSONDecodeError, TypeError):
+        pass
     tentativas = state.get('tentativas_refinamento', 0) + 1
     revisao = state.get('revisao_critico') or "Nenhuma. Esta é a primeira versão."
     result = chain_canais.invoke({
