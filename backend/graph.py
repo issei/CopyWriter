@@ -3,6 +3,8 @@ LangGraph: grafo de agentes com 4 nós de análise em paralelo,
 agente de prova social, 4 chains especializadas por canal e loop de refinamento.
 """
 import json
+import re
+import time
 from typing import TypedDict, Optional, Dict, Any
 
 import streamlit as st
@@ -48,19 +50,19 @@ def get_compiled_graph():
 
     chain_dores = ChatPromptTemplate.from_messages([
         ("system", BASE + " Extraia as DORES profundas e as PROMESSAS transformacionais. "
-                         "JSON: {\"dores\": [...], \"promessas\": [...]}"),
+                         "JSON: {{\"dores\": [...], \"promessas\": [...]}}"),
         ("human", "Briefing:\n{briefing}\n\nContexto RAG:\n{contexto}"),
     ]) | llm
 
     chain_objecoes = ChatPromptTemplate.from_messages([
         ("system", BASE + " Liste objeções prováveis e crie quebras persuasivas para cada uma. "
-                         "JSON: {\"objecoes\": [...], \"quebras\": [...]}"),
+                         "JSON: {{\"objecoes\": [...], \"quebras\": [...]}}"),
         ("human", "Briefing:\n{briefing}\n\nContexto RAG:\n{contexto}"),
     ]) | llm
 
     chain_headlines = ChatPromptTemplate.from_messages([
         ("system", BASE + " Crie headlines magnéticas e ângulos de comunicação diferenciados. "
-                         "JSON: {\"headlines\": [...], \"angulos\": [...]}"),
+                         "JSON: {{\"headlines\": [...], \"angulos\": [...]}}"),
         ("human", "Briefing:\n{briefing}\n\nContexto RAG:\n{contexto}"),
     ]) | llm
 
@@ -70,8 +72,8 @@ def get_compiled_graph():
         ("system", BASE + (
             " Você é especialista em prova social para lançamentos. "
             "Formate depoimentos, métricas e autoridade do produtor em snippets prontos para uso na copy. "
-            "JSON: {\"snippets_depoimentos\": [...], \"snippet_metricas\": \"...\", "
-            "\"snippet_autoridade\": \"...\", \"social_proof_headline\": \"...\"}"
+            "JSON: {{\"snippets_depoimentos\": [...], \"snippet_metricas\": \"...\", "
+            "\"snippet_autoridade\": \"...\", \"social_proof_headline\": \"...\"}}"
         )),
         ("human", (
             "Briefing:\n{briefing}\n\n"
@@ -91,7 +93,7 @@ def get_compiled_graph():
             "prova social integrada organicamente, quebra das principais objeções, "
             "apresentação da oferta com valor percebido alto, e CTA claro e urgente. "
             "Tom: conversacional mas direto. Extensão: mínimo 400 palavras. "
-            "JSON: {\"subject\": \"...\", \"body\": \"...\"}"
+            "JSON: {{\"subject\": \"...\", \"body\": \"...\"}}"
         )),
         ("human", _canal_prompt()),
     ]) | llm
@@ -103,7 +105,7 @@ def get_compiled_graph():
             "Regras: texto curto (máx 3 linhas por slide), linguagem informal com emojis estratégicos, "
             "progressão narrativa (hook → dor → solução → prova → oferta → urgência → CTA → lembrete), "
             "cada slide deve funcionar de forma autônoma mas também como parte da sequência. "
-            "JSON: {\"slides\": [{\"numero\": 1, \"visual\": \"descrição do visual sugerido\", \"copy\": \"texto do slide\"}]}"
+            "JSON: {{\"slides\": [{{\"numero\": 1, \"visual\": \"descrição do visual sugerido\", \"copy\": \"texto do slide\"}}]}}"
         )),
         ("human", _canal_prompt()),
     ]) | llm
@@ -115,7 +117,7 @@ def get_compiled_graph():
             "variação 1 (ângulo dor), variação 2 (ângulo transformação), variação 3 (ângulo autoridade/prova). "
             "Restrições: headline máx 40 chars, primary_text máx 300 chars (sem truncar a mensagem), "
             "link_description máx 30 chars. "
-            "JSON: {\"ads\": [{\"angulo\": \"...\", \"headline\": \"...\", \"primary_text\": \"...\", \"link_description\": \"...\"}]}"
+            "JSON: {{\"ads\": [{{\"angulo\": \"...\", \"headline\": \"...\", \"primary_text\": \"...\", \"link_description\": \"...\"}}]}}"
         )),
         ("human", _canal_prompt()),
     ]) | llm
@@ -132,7 +134,7 @@ def get_compiled_graph():
             "O Que Você Vai Ter (10:00-12:00) — oferta detalhada com bônus, "
             "Garantia e Objeções (12:00-13:30) — quebra das últimas resistências, "
             "CTA e Urgência (13:30-15:00) — chamada para ação com escassez real. "
-            "JSON: {\"script\": [{\"time\": \"0:00-1:30\", \"segment\": \"Hook\", \"copy\": \"...\"}]}"
+            "JSON: {{\"script\": [{{\"time\": \"0:00-1:30\", \"segment\": \"Hook\", \"copy\": \"...\"}}]}}"
         )),
         ("human", _canal_prompt()),
     ]) | llm
@@ -150,6 +152,33 @@ def get_compiled_graph():
         ("human", "Briefing:\n{briefing}\n\nCopy gerada:\n{copy_por_canal}"),
     ]) | llm
 
+    # ── Retry para 429 ────────────────────────────────────────────────────────
+
+    def safe_invoke(chain, inp: Dict, label: str = ""):
+        """
+        Invoca uma chain com retry automático para erros 429 (rate limit).
+        Extrai o retryDelay sugerido pela API e aguarda antes de tentar novamente.
+        """
+        max_attempts = 4
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return chain.invoke(inp)
+            except Exception as e:
+                msg = str(e)
+                is_rate_limit = "429" in msg or "RESOURCE_EXHAUSTED" in msg
+                if is_rate_limit and attempt < max_attempts:
+                    # tenta extrair o delay sugerido pela API (ex: "retryDelay: '52s'")
+                    m = re.search(r"retryDelay['\": ]+(\d+)", msg)
+                    wait = int(m.group(1)) + 5 if m else 65 * attempt
+                    warn = (
+                        f"⏳ Rate limit atingido{f' em {label}' if label else ''}. "
+                        f"Aguardando {wait}s antes da tentativa {attempt + 1}/{max_attempts}..."
+                    )
+                    st.warning(warn)
+                    time.sleep(wait)
+                else:
+                    raise
+
     # ── Nós do Grafo ──────────────────────────────────────────────────────────
 
     def _b(state): return json.dumps(state["briefing"], ensure_ascii=False)
@@ -157,17 +186,17 @@ def get_compiled_graph():
 
     def node_dores_promessas(state: AgentState) -> Dict[str, Any]:
         st.write("🔄 *Dores & Promessas:* mapeando o universo emocional do público...")
-        r = chain_dores.invoke({"briefing": _b(state), "contexto": _c(state)})
+        r = safe_invoke(chain_dores, {"briefing": _b(state), "contexto": _c(state)}, "Dores & Promessas")
         return {"dores_promessas": force_json(r)}
 
     def node_objecoes_quebras(state: AgentState) -> Dict[str, Any]:
         st.write("🔄 *Objeções & Quebras:* antecipando resistências do comprador...")
-        r = chain_objecoes.invoke({"briefing": _b(state), "contexto": _c(state)})
+        r = safe_invoke(chain_objecoes, {"briefing": _b(state), "contexto": _c(state)}, "Objeções & Quebras")
         return {"objecoes_quebras": force_json(r)}
 
     def node_headlines_angulos(state: AgentState) -> Dict[str, Any]:
         st.write("🔄 *Headlines & Ângulos:* criando ganchos e ângulos magnéticos...")
-        r = chain_headlines.invoke({"briefing": _b(state), "contexto": _c(state)})
+        r = safe_invoke(chain_headlines, {"briefing": _b(state), "contexto": _c(state)}, "Headlines & Ângulos")
         return {"headlines_angulos": force_json(r)}
 
     def node_consolidador(state: AgentState) -> Dict[str, Any]:
@@ -186,17 +215,25 @@ def get_compiled_graph():
     def node_prova_social(state: AgentState) -> Dict[str, Any]:
         st.write("🔄 *Prova Social:* formatando depoimentos e métricas para máxima credibilidade...")
         ps = state["briefing"].get("briefing_lancamento", {}).get("prova_social", {})
-        r = chain_prova_social.invoke({
+        r = safe_invoke(chain_prova_social, {
             "briefing":    _b(state),
             "depoimentos": ps.get("depoimentos", "Nenhum depoimento informado."),
             "metricas":    ps.get("metricas", "Nenhuma métrica informada."),
             "autoridade":  ps.get("autoridade_produtor", ""),
-        })
+        }, "Prova Social")
         parsed = force_json(r)
-        # Serializa como texto para injetar nos prompts dos canais
         if "error" not in parsed:
+            # normaliza: aceita lista de strings ou lista de dicts
+            raw = parsed.get("snippets_depoimentos", [])
+            depos = []
+            for item in raw:
+                if isinstance(item, str):
+                    depos.append(item)
+                elif isinstance(item, dict):
+                    # extrai o primeiro valor de texto encontrado no dict
+                    depos.append(next((str(v) for v in item.values() if v), ""))
             snippets = (
-                f"DEPOIMENTOS: {', '.join(parsed.get('snippets_depoimentos', []))}\n"
+                f"DEPOIMENTOS: {', '.join(depos)}\n"
                 f"MÉTRICAS: {parsed.get('snippet_metricas', '')}\n"
                 f"AUTORIDADE: {parsed.get('snippet_autoridade', '')}\n"
                 f"HEADLINE DE PROVA: {parsed.get('social_proof_headline', '')}"
@@ -226,10 +263,14 @@ def get_compiled_graph():
             pass
 
         inp = _canal_input(state)
-        email_raw   = chain_email.invoke(inp)
-        stories_raw = chain_stories.invoke(inp)
-        ads_raw     = chain_ads.invoke(inp)
-        vsl_raw     = chain_vsl.invoke(inp)
+        # delay de 2s entre chamadas para respeitar o RPM do free tier
+        email_raw   = safe_invoke(chain_email,   inp, "Email")
+        time.sleep(2)
+        stories_raw = safe_invoke(chain_stories, inp, "Stories")
+        time.sleep(2)
+        ads_raw     = safe_invoke(chain_ads,     inp, "Ads")
+        time.sleep(2)
+        vsl_raw     = safe_invoke(chain_vsl,     inp, "VSL")
 
         email   = force_json(email_raw)
         stories = force_json(stories_raw)
@@ -249,10 +290,10 @@ def get_compiled_graph():
         copy = state.get("copy_por_canal", {})
         if "error" in copy:
             return {"revisao_critico": "ERRO_NA_GERACAO"}
-        r = chain_critico.invoke({
-            "briefing":     _b(state),
+        r = safe_invoke(chain_critico, {
+            "briefing":       _b(state),
             "copy_por_canal": json.dumps(copy, ensure_ascii=False),
-        })
+        }, "Crítico")
         st.info(f"💬 **Crítico:** {r.content}")
         return {"revisao_critico": r.content}
 

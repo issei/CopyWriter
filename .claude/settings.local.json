@@ -6,7 +6,12 @@
       "Bash(pip install *)",
       "Bash(py -m pip install --upgrade pip)",
       "Bash(\".\\\\venv\\\\Scripts\\\\python.exe\" -m pip install -r requirements.txt)",
-      "Bash(\".\\\\venv\\\\Scripts\\\\python.exe\" -m pip install -q langchain-chroma)"
+      "Bash(\".\\\\venv\\\\Scripts\\\\python.exe\" -m pip install -q langchain-chroma)",
+      "Bash(wmic computersystem *)",
+      "Bash(wmic cpu *)",
+      "Bash(wmic path *)",
+      "Bash('.\\\\venv\\\\Scripts\\\\python.exe' -c ' *)",
+      "Bash(findstr \"GEMINI_MODEL\" config.py)"
     ]
   }
 }
