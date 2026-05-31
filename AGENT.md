@@ -150,11 +150,52 @@ Fallback devolve `{"error": "...", "raw_content": "..."}` que é detectado e exi
 
 ```
 D:\projetos\CopyWriter\
-├── app.py           # Aplicação completa refatorada
-├── .env             # GOOGLE_API_KEY (não commitar)
-├── .gitignore       # Cobre .env, venv/, chroma_db/, __pycache__/
-├── AGENT.md         # Este arquivo
-├── requirements.txt # Dependências pip
-├── venv/            # Ambiente virtual (não commitar)
-└── chroma_db/       # Criado em runtime — apagado a cada execução
+├── app.py                      # Entry point — orquestra form → RAG → grafo → resultados → histórico
+├── config.py                   # Constantes (GEMINI_MODEL, TEMPERATURE, MAX_REFINEMENT, etc.)
+├── .env                        # GOOGLE_API_KEY (não commitar)
+├── .gitignore                  # Cobre .env, venv/, chroma_db/, historico.db
+├── AGENT.md                    # Este arquivo
+├── requirements.txt            # Dependências pip (inclui pypdf, python-docx)
+├── start.bat                   # Atalho de inicialização
+├── historico.db                # SQLite gerado em runtime (não commitar)
+├── chroma_db/                  # Criado em runtime — apagado a cada execução
+├── backend/
+│   ├── llm.py                  # get_llm() com @st.cache_resource
+│   ├── parsers.py              # force_json, canonicalize_briefing, extração de arquivo/campos
+│   ├── rag.py                  # setup_rag (ChromaDB)
+│   ├── historico.py            # SQLite CRUD (init_db, salvar, listar, carregar, deletar)
+│   └── graph.py                # AgentState, get_compiled_graph(), todos os nós
+├── data/
+│   └── templates.py            # 5 templates pré-configurados por nicho
+└── frontend/
+    ├── ui_form.py              # render_toolbar() + render_form() → briefing_dinamico
+    ├── ui_results.py           # render_results(final_copy) → 5 abas com downloads
+    └── ui_historico.py         # render_historico() → expander com lista e ações
 ```
+
+## Grafo atualizado
+
+```
+START ──┬──► analise_dores_promessas ──┐
+        ├──► analise_objecoes_quebras ──┼──► consolidador ──► analise_prova_social ──► adaptacao_canais ──► critico_revisor
+        └──► analise_headlines_angulos ─┘                                                    ↑ refinar (até 2x)
+```
+
+`adaptacao_canais` chama 4 chains especializadas em sequência:
+- `chain_email` — email marketing longo com storytelling
+- `chain_stories` — 8 slides verticais com visual sugerido
+- `chain_ads` — 3 variações AIDA (dor / transformação / autoridade)
+- `chain_vsl` — script de 15 min com 8 blocos cronometrados
+
+## Skills implementadas
+
+| Skill | Módulo | Status |
+|-------|--------|--------|
+| Calibração de tom por canal | `backend/graph.py` → 4 chains | ✅ |
+| Agente de Prova Social | `backend/graph.py` → `node_prova_social` | ✅ |
+| Importação de arquivo (PDF/DOCX/TXT) | `backend/parsers.py` + `frontend/ui_form.py` | ✅ |
+| Templates por nicho (5 nichos) | `data/templates.py` + `frontend/ui_form.py` | ✅ |
+| Histórico de lançamentos (SQLite) | `backend/historico.py` + `frontend/ui_historico.py` | ✅ |
+| Separação backend/frontend | Estrutura de módulos | ✅ |
+| Download por canal | `frontend/ui_results.py` | ✅ |
+| Debug expander de JSON | `frontend/ui_results.py` | ✅ |

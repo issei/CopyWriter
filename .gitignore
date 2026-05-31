@@ -1,6 +1,7 @@
 venv/
 chroma_db/
 .env
+historico.db
 __pycache__/
 *.pyc
 *.pyo

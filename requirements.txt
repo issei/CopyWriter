@@ -6,4 +6,8 @@ langchain-google-genai
 google-generativeai
 chromadb
 langchain-community
+langchain-chroma
+langchain-text-splitters
 python-dotenv
+pypdf
+python-docx
