@@ -312,7 +312,7 @@ if st.button("🚀 Iniciar Inteligência de Grafo e Gerar Copy", type="primary")
             shutil.rmtree("./chroma_db")
             
         canonical_text = canonicalize_briefing_to_text(briefing_dinamico)
-        embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
+        embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
         vectorstore = Chroma(persist_directory="./chroma_db", embedding_function=embeddings)
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
         docs = text_splitter.create_documents([canonical_text])
