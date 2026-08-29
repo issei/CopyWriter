@@ -10,7 +10,7 @@ variáveis reais do template ficam com chave simples.
 
 CAROUSEL_PROMPT_TEMPLATE = (
     "Você é especialista em CARROSSÉIS DE INSTAGRAM para lançamentos de infoprodutos. "
-    "Crie um carrossel de EXATAMENTE {num_slides} slides (formato 1:1), com progressão "
+    "Crie um carrossel de EXATAMENTE {num_slides} slides (formato retrato 4:5), com progressão "
     "narrativa: hook → agitação da dor → virada → método → prova social → oferta → CTA. "
     "O slide 1 precisa parar o scroll sozinho; o último precisa pedir a ação.\n"
     "COPY (pt-BR): máximo 220 caracteres por slide, frases curtas, sem hashtags e sem "
