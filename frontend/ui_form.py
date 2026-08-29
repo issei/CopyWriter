@@ -1,11 +1,17 @@
-"""Formulário de entrada: templates, importação de arquivo e 5 abas de briefing."""
+"""
+Formulário de entrada: templates, importação de arquivo, seleção de entrega
+e 5 abas de briefing.
+"""
 from typing import Dict, List
 
 import streamlit as st
 
 from backend.llm import get_llm
-from backend.parsers import extrair_texto_de_arquivo, extrair_campos_de_texto
+from backend.parsers import clamp_slides, extrair_texto_de_arquivo, extrair_campos_de_texto
 from data.templates import TEMPLATES
+
+MODO_PADRAO    = "Copy padrão (4 canais)"
+MODO_CARROSSEL = "Copy padrão + Carrossel"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -66,9 +72,47 @@ def render_toolbar() -> None:
 
 def render_form() -> Dict:
     """
-    Renderiza as 5 abas de briefing e retorna o dicionário
-    briefing_dinamico pronto para o grafo.
+    Renderiza a seleção de entrega e as 5 abas de briefing, e retorna o
+    dicionário briefing_dinamico pronto para o grafo.
+
+    As chaves com prefixo `_` são metadados de execução, não dados de briefing:
+    quem chama deve removê-las com `pop` antes de passar o dict adiante, para
+    não poluir o RAG (`canonicalize_briefing`) nem o histórico.
     """
+    # ── Tipo de entrega (escolha de execução, não dado de briefing) ───────────
+    st.subheader("🎯 O que gerar")
+    c_modo, c_slides = st.columns([3, 2])
+
+    with c_modo:
+        modo = st.radio(
+            "Tipo de entrega",
+            [MODO_PADRAO, MODO_CARROSSEL],
+            index=1 if _v("content_type", "padrao") == "carousel" else 0,
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+
+    quer_carrossel = modo == MODO_CARROSSEL
+    num_slides = None
+    with c_slides:
+        if quer_carrossel:
+            num_slides = st.slider(
+                "Número de slides",
+                min_value=5, max_value=10,
+                value=clamp_slides(_v("num_slides", 7)),
+                help="Meta enviada ao modelo. Slides em excesso são descartados; "
+                     "se vierem menos, o carrossel é exibido como veio.",
+            )
+
+    if quer_carrossel:
+        st.caption(
+            "O carrossel é gerado **além** dos 4 canais, a partir da copy já aprovada "
+            "pelo crítico. Cada slide sai com o texto da imagem e uma direção visual "
+            "em inglês para colar no Google Pomelli."
+        )
+
+    st.write("")
+
     t1, t2, t3, t4, t5 = st.tabs([
         "📦 O Infoproduto",
         "👥 Público-Alvo",
@@ -205,5 +249,7 @@ def render_form() -> Dict:
                 "metricas": metricas,
             },
         },
-        "_problema_principal": problema_principal,  # atalho para o RAG
+        "_problema_principal": problema_principal,          # atalho para o RAG
+        "_content_type": "carousel" if quer_carrossel else "padrao",
+        "_num_slides": num_slides,
     }

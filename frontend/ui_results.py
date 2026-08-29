@@ -1,8 +1,17 @@
-"""Exibição dos resultados: 5 abas com download por canal."""
+"""Exibição dos resultados: uma aba por canal, com download individual."""
 import json
 from typing import Dict
 
 import streamlit as st
+
+from backend.parsers import bloco_pomelli_completo, bloco_pomelli_slide
+
+ABA_EMAIL     = "📧 Email Marketing"
+ABA_STORIES   = "📱 Instagram Stories"
+ABA_CARROSSEL = "🎠 Carrossel"
+ABA_VSL       = "📺 YouTube (VSL)"
+ABA_ADS       = "📢 Meta Ads"
+ABA_JSON      = "📄 JSON Completo"
 
 
 def render_results(final_copy: Dict) -> None:
@@ -16,16 +25,16 @@ def render_results(final_copy: Dict) -> None:
             st.code(final_copy.get("raw_content", "sem conteúdo"), language="text")
         return
 
-    t1, t2, t3, t4, t5 = st.tabs([
-        "📧 Email Marketing",
-        "📱 Instagram Stories",
-        "📺 YouTube (VSL)",
-        "📢 Meta Ads",
-        "📄 JSON Completo",
-    ])
+    # Acesso nominal às abas: a do carrossel é condicional e entra no meio da
+    # lista, o que quebraria o desempacotamento posicional.
+    nomes = [ABA_EMAIL, ABA_STORIES]
+    if final_copy.get("carrossel"):
+        nomes.append(ABA_CARROSSEL)
+    nomes += [ABA_VSL, ABA_ADS, ABA_JSON]
+    tabs = dict(zip(nomes, st.tabs(nomes)))
 
     # ── Email ─────────────────────────────────────────────────────────────────
-    with t1:
+    with tabs[ABA_EMAIL]:
         email = final_copy.get("email", {})
         subject = email.get("subject", email.get("assunto", ""))
         body    = email.get("body",    email.get("corpo",   ""))
@@ -38,7 +47,7 @@ def render_results(final_copy: Dict) -> None:
                            file_name="email_marketing.txt", mime="text/plain")
 
     # ── Stories ───────────────────────────────────────────────────────────────
-    with t2:
+    with tabs[ABA_STORIES]:
         slides = final_copy.get("stories", [])
         # normaliza: aceita lista de dicts com ou sem chave slide_N
         if isinstance(slides, dict):
@@ -77,8 +86,13 @@ def render_results(final_copy: Dict) -> None:
                 mime="text/plain",
             )
 
+    # ── Carrossel (ponte manual com o Google Pomelli) ─────────────────────────
+    if ABA_CARROSSEL in tabs:
+        with tabs[ABA_CARROSSEL]:
+            _render_carrossel(final_copy["carrossel"])
+
     # ── VSL ───────────────────────────────────────────────────────────────────
-    with t3:
+    with tabs[ABA_VSL]:
         vsl = final_copy.get("vsl", {})
         blocks = vsl.get("script", []) if isinstance(vsl, dict) else []
 
@@ -102,7 +116,7 @@ def render_results(final_copy: Dict) -> None:
             )
 
     # ── Meta Ads ──────────────────────────────────────────────────────────────
-    with t4:
+    with tabs[ABA_ADS]:
         ads = final_copy.get("ads", [])
         if isinstance(ads, dict):
             ads = [ads]
@@ -143,7 +157,7 @@ def render_results(final_copy: Dict) -> None:
             )
 
     # ── JSON Completo ─────────────────────────────────────────────────────────
-    with t5:
+    with tabs[ABA_JSON]:
         st.json(final_copy)
         st.download_button(
             "⬇️ Baixar JSON Completo",
@@ -151,3 +165,81 @@ def render_results(final_copy: Dict) -> None:
             file_name="copy_completa.json",
             mime="application/json",
         )
+
+
+# ── Carrossel ─────────────────────────────────────────────────────────────────
+
+def _render_carrossel(carrossel: Dict) -> None:
+    """
+    Cards em grade, cada um com o bloco pronto para colar no Google Pomelli.
+
+    A cópia usa `st.code`, que já traz o ícone nativo de copiar: `st.button`
+    roda no servidor e não alcança a área de transferência do navegador, e
+    `pyperclip` escreveria no clipboard da máquina que hospeda o app.
+    """
+    if not isinstance(carrossel, dict) or "error" in carrossel:
+        erro = carrossel.get("error", "formato inesperado") if isinstance(carrossel, dict) else "formato inesperado"
+        st.error(f"Erro ao gerar o carrossel: {erro}")
+        with st.expander("🔍 Ver conteúdo bruto para debug"):
+            bruto = carrossel.get("raw_content", "sem conteúdo") if isinstance(carrossel, dict) else str(carrossel)
+            st.code(bruto, language="text")
+        return
+
+    slides = carrossel.get("slides", [])
+    if not slides:
+        st.info("Nenhum slide de carrossel gerado.")
+        return
+
+    estilo = carrossel.get("estilo_visual_global", "")
+    total  = len(slides)
+
+    st.subheader(f"🎠 Carrossel de {total} slides")
+    if estilo:
+        st.info(f"🎨 **Estilo visual global** (repete em todos os slides): `{estilo}`")
+
+    with st.expander("📋 Copiar TODAS as diretrizes para o Google Pomelli", expanded=False):
+        st.caption(
+            "Use o ícone de copiar no canto do bloco. O estilo global vem primeiro — "
+            "o Pomelli precisa da identidade constante antes das variações de cada slide."
+        )
+        st.code(bloco_pomelli_completo(carrossel), language="text")
+
+    st.divider()
+
+    # ── Grade de cards ────────────────────────────────────────────────────────
+    cols_per_row = 2
+    for i in range(0, total, cols_per_row):
+        cols = st.columns(cols_per_row)
+        for j, col in enumerate(cols):
+            idx = i + j
+            if idx >= total:
+                break
+            slide = slides[idx]
+            with col:
+                with st.container(border=True):
+                    papel = slide.get("papel", "")
+                    st.caption(f"**Slide {slide.get('numero', idx+1)}/{total}**"
+                               + (f" · {papel}" if papel else ""))
+                    st.write(slide.get("texto_slide", ""))
+                    visual = slide.get("prompt_visual_pomelli", "")
+                    if visual:
+                        st.info(f"🎬 `{visual}`")
+                    with st.popover("📋 Copiar diretrizes para o Pomelli",
+                                    use_container_width=True):
+                        st.code(bloco_pomelli_slide(slide, total, estilo), language="text")
+
+    # ── Legenda do post ───────────────────────────────────────────────────────
+    legenda = carrossel.get("legenda", "")
+    hashtags = " ".join(carrossel.get("hashtags", []))
+    if legenda:
+        st.divider()
+        st.markdown("#### 📝 Legenda do post (fora das imagens)")
+        st.code(legenda + (f"\n\n{hashtags}" if hashtags else ""), language="text")
+
+    st.download_button(
+        "⬇️ Baixar Carrossel (.txt)",
+        data=bloco_pomelli_completo(carrossel),
+        file_name="carrossel_pomelli.txt",
+        mime="text/plain",
+        key="dl_carrossel",
+    )

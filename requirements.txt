@@ -11,3 +11,4 @@ langchain-text-splitters
 python-dotenv
 pypdf
 python-docx
+pytest

@@ -1,6 +1,10 @@
 """
-LangGraph: grafo de agentes com 4 nós de análise em paralelo,
-agente de prova social, 4 chains especializadas por canal e loop de refinamento.
+LangGraph: grafo de agentes com 4 nós de análise em paralelo, agente de prova
+social, 4 chains especializadas por canal e loop de refinamento.
+
+Quando `content_type == "carousel"`, uma aresta condicional acrescenta o nó
+`geracao_carrossel` depois da aprovação do crítico — um 5º canal, sem alterar
+nenhum caminho da V1.
 """
 import json
 import re
@@ -12,8 +16,9 @@ from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, START, END
 
 from backend.llm import get_llm
-from backend.parsers import force_json
+from backend.parsers import clamp_slides, force_json, normalizar_carrossel
 from config import MAX_REFINEMENT
+from data.prompts import CAROUSEL_PROMPT_TEMPLATE
 
 
 # ── Estado ────────────────────────────────────────────────────────────────────
@@ -29,6 +34,31 @@ class AgentState(TypedDict):
     copy_por_canal: Optional[Dict]
     revisao_critico: Optional[str]
     tentativas_refinamento: int
+    # ── Campos do fluxo de carrossel — opcionais; a V1 nunca os informa ───────
+    content_type: Optional[str]          # "carousel" liga o nó geracao_carrossel
+    num_slides: Optional[int]            # 5–10; só o carrossel usa
+    visual_suggestions: Optional[list]   # prompts visuais achatados, derivados dos slides
+
+
+# ── Roteamento (puro — sem closure do LLM, testável isoladamente) ─────────────
+
+def decidir_pos_critica(state: AgentState) -> str:
+    """
+    Decide o destino após o crítico: refinar, gerar o carrossel ou encerrar.
+
+    Todo acesso a campo novo usa `.get()` — o estado inicial da V1 traz apenas
+    briefing, contexto_rag e tentativas_refinamento.
+    """
+    revisao    = state.get("revisao_critico", "")
+    tentativas = state.get("tentativas_refinamento", 0)
+    houve_erro = "ERRO_NA_GERACAO" in revisao
+    encerrou   = houve_erro or "APROVADO" in revisao or tentativas >= MAX_REFINEMENT
+
+    if not encerrou:
+        return "refinar"
+    if not houve_erro and state.get("content_type") == "carousel":
+        return "carrossel"
+    return "end"
 
 
 # ── Grafo compilado (singleton por sessão) ────────────────────────────────────
@@ -136,6 +166,15 @@ def get_compiled_graph():
             "CTA e Urgência (13:30-15:00) — chamada para ação com escassez real. "
             "JSON: {{\"script\": [{{\"time\": \"0:00-1:30\", \"segment\": \"Hook\", \"copy\": \"...\"}}]}}"
         )),
+        ("human", _canal_prompt()),
+    ]) | llm
+
+    # ── Chain do carrossel (5º canal, opcional) ───────────────────────────────
+    # num_slides entra como variável do template: get_compiled_graph é cacheado
+    # com @st.cache_resource e o prompt é construído uma única vez por processo.
+
+    chain_carrossel = ChatPromptTemplate.from_messages([
+        ("system", CAROUSEL_PROMPT_TEMPLATE),
         ("human", _canal_prompt()),
     ]) | llm
 
@@ -297,12 +336,22 @@ def get_compiled_graph():
         st.info(f"💬 **Crítico:** {r.content}")
         return {"revisao_critico": r.content}
 
-    def decidir_pos_critica(state: AgentState) -> str:
-        revisao   = state.get("revisao_critico", "")
-        tentativas = state.get("tentativas_refinamento", 0)
-        if "ERRO_NA_GERACAO" in revisao or "APROVADO" in revisao or tentativas >= MAX_REFINEMENT:
-            return "end"
-        return "refinar"
+    def node_geracao_carrossel(state: AgentState) -> Dict[str, Any]:
+        n = clamp_slides(state.get("num_slides"))
+        st.write(f"🔄 *Carrossel:* montando {n} slides e a direção visual para o Pomelli...")
+        time.sleep(2)  # mesmo espaçamento de RPM usado entre os 4 canais
+        r = safe_invoke(chain_carrossel, {**_canal_input(state), "num_slides": n}, "Carrossel")
+        carrossel = normalizar_carrossel(force_json(r), n)
+
+        copy = dict(state.get("copy_por_canal") or {})
+        copy["carrossel"] = carrossel
+        return {
+            "copy_por_canal": copy,
+            # derivado dos slides — conveniência para o bloco "copiar tudo"
+            "visual_suggestions": [
+                s["prompt_visual_pomelli"] for s in carrossel.get("slides", [])
+            ],
+        }
 
     # ── Montagem do Grafo ─────────────────────────────────────────────────────
 
@@ -314,6 +363,7 @@ def get_compiled_graph():
     graph.add_node("analise_prova_social",      node_prova_social)
     graph.add_node("adaptacao_canais",          node_adaptacao_canais)
     graph.add_node("critico_revisor",           node_critico_revisor)
+    graph.add_node("geracao_carrossel",         node_geracao_carrossel)
 
     # 3 análises em paralelo a partir do START
     graph.add_edge(START, "analise_dores_promessas")
@@ -328,11 +378,18 @@ def get_compiled_graph():
     graph.add_edge("analise_prova_social",      "adaptacao_canais")
     graph.add_edge("adaptacao_canais",          "critico_revisor")
 
+    # O carrossel roda uma única vez, depois da aprovação: fica fora do loop de
+    # refinamento e parte da copy já aprovada pelo crítico.
     graph.add_conditional_edges(
         "critico_revisor",
         decidir_pos_critica,
-        {"refinar": "adaptacao_canais", "end": END},
+        {
+            "refinar":   "adaptacao_canais",
+            "carrossel": "geracao_carrossel",
+            "end":       END,
+        },
     )
+    graph.add_edge("geracao_carrossel", END)
 
     return graph.compile()
 

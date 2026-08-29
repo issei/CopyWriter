@@ -37,6 +37,13 @@ def render_historico() -> None:
                         ps  = bl.get("prova_social", {})
                         datas = est.get("datas_chave", {})
 
+                        # O modo de entrega não é salvo em coluna própria:
+                        # é inferido da copy, que já carrega o carrossel.
+                        slides_carrossel = (
+                            (dados["copy"].get("carrossel") or {}).get("slides", [])
+                            if isinstance(dados["copy"], dict) else []
+                        )
+
                         st.session_state.form_values = {
                             "nome_produto":          inf.get("nome", ""),
                             "produtor":              inf.get("produtor", ""),
@@ -59,6 +66,8 @@ def render_historico() -> None:
                             "autoridade_produtor":   ps.get("autoridade_produtor", ""),
                             "depoimentos":           ps.get("depoimentos", ""),
                             "metricas":              ps.get("metricas", ""),
+                            "content_type":          "carousel" if slides_carrossel else "padrao",
+                            "num_slides":            len(slides_carrossel) or 7,
                         }
                         st.session_state.final_copy = dados["copy"]
                         st.success(f"✅ Briefing #{row['id']} carregado!")
