@@ -134,3 +134,131 @@ def extrair_campos_de_texto(texto: str, llm) -> Dict:
     if "error" in parsed:
         return {}
     return parsed
+
+
+# ── Carrossel de Instagram → normalização e ponte com o Pomelli ──────────────
+
+_ALIAS_TEXTO  = ("texto_slide", "texto", "copy", "text")
+_ALIAS_VISUAL = ("prompt_visual_pomelli", "prompt_visual", "visual")
+_ALIAS_PAPEL  = ("papel", "funcao", "role")
+
+_SEP = "\n\n" + "─" * 56 + "\n\n"
+
+
+def clamp_slides(n: Any) -> int:
+    """Normaliza o número de slides para a faixa 5–10 (default 7)."""
+    try:
+        return max(5, min(10, int(n)))
+    except (TypeError, ValueError):
+        return 7
+
+
+def _primeiro(d: Dict, chaves) -> str:
+    """Primeiro valor de texto não-vazio entre as chaves informadas."""
+    for k in chaves:
+        v = d.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+def _normalizar_hashtags(brutas: Any) -> list:
+    if isinstance(brutas, str):
+        brutas = [h for h in brutas.replace(",", " ").split() if h]
+    if not isinstance(brutas, list):
+        return []
+    tags = []
+    for h in brutas:
+        if not isinstance(h, str) or not h.strip():
+            continue
+        h = h.strip()
+        tags.append(h if h.startswith("#") else f"#{h}")
+    return tags
+
+
+def normalizar_carrossel(bruto: Any, num_slides: int) -> Dict:
+    """
+    Normaliza a saída do nó de carrossel para o contrato consumido pela UI.
+
+    Tolera as variações que o LLM produz na prática: `slides` como dict,
+    slides embrulhados em {"slide_N": {...}} e aliases de nome de campo.
+    Excesso de slides é truncado; falta NÃO é preenchida — slide inventado
+    por template é pior que slide a menos.
+    """
+    if not isinstance(bruto, dict):
+        return {"error": "Saída do carrossel em formato inesperado",
+                "raw_content": str(bruto)[:800]}
+    if "error" in bruto:
+        return bruto
+
+    slides_brutos = bruto.get("slides", [])
+    if isinstance(slides_brutos, dict):
+        slides_brutos = list(slides_brutos.values())
+    if not isinstance(slides_brutos, list):
+        slides_brutos = []
+
+    slides = []
+    for item in slides_brutos:
+        if not isinstance(item, dict):
+            continue
+        # aceita {"slide_1": {...}} além do dict direto
+        if len(item) == 1:
+            interno = next(iter(item.values()))
+            if isinstance(interno, dict):
+                item = interno
+
+        texto = _primeiro(item, _ALIAS_TEXTO)
+        if not texto:
+            continue
+
+        slides.append({
+            "numero": len(slides) + 1,          # o LLM erra a numeração com frequência
+            "papel": _primeiro(item, _ALIAS_PAPEL),
+            "texto_slide": texto,
+            "prompt_visual_pomelli": _primeiro(item, _ALIAS_VISUAL),
+        })
+        if len(slides) >= num_slides:
+            break
+
+    return {
+        "estilo_visual_global": str(bruto.get("estilo_visual_global") or "").strip(),
+        "legenda":              str(bruto.get("legenda") or bruto.get("caption") or "").strip(),
+        "hashtags":             _normalizar_hashtags(bruto.get("hashtags")),
+        "slides":               slides,
+    }
+
+
+def bloco_pomelli_slide(slide: Dict, total: int, estilo_global: str = "") -> str:
+    """Bloco de um slide, pronto para colar no Google Pomelli."""
+    papel = slide.get("papel", "")
+    cabecalho = f"SLIDE {slide.get('numero', '?')}/{total}" + (f" — {papel}" if papel else "")
+    visual = ", ".join(p for p in (estilo_global, slide.get("prompt_visual_pomelli", "")) if p)
+    return (
+        f"{cabecalho}\n\n"
+        f"TEXTO (vai na imagem):\n{slide.get('texto_slide', '')}\n\n"
+        f"VISUAL DIRECTION (paste into Pomelli):\n{visual}"
+    )
+
+
+def bloco_pomelli_completo(carrossel: Dict) -> str:
+    """
+    Carrossel inteiro em um único bloco. Abre pelo estilo visual global —
+    o Pomelli precisa da identidade constante antes das variações, senão
+    cada slide vira um post diferente.
+    """
+    slides = carrossel.get("slides", [])
+    total  = len(slides)
+    estilo = carrossel.get("estilo_visual_global", "")
+
+    partes = [f"CARROSSEL DE INSTAGRAM — {total} slides"]
+    if estilo:
+        partes.append(f"ESTILO VISUAL GLOBAL (aplica a todos os slides):\n{estilo}")
+    # o estilo global já foi declarado acima; não repetir em cada slide
+    partes.extend(bloco_pomelli_slide(s, total) for s in slides)
+
+    legenda = carrossel.get("legenda", "")
+    if legenda:
+        tags = " ".join(carrossel.get("hashtags", []))
+        partes.append("LEGENDA DO POST (fora das imagens):\n" + legenda + (f"\n\n{tags}" if tags else ""))
+
+    return _SEP.join(partes)

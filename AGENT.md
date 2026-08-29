@@ -15,11 +15,25 @@ Aplicação Streamlit que usa um grafo LangGraph para gerar copy de lançamento 
 ## Estrutura de arquivos
 
 ```
-D:\projetos\CopyWriter\
-├── app.py           # Toda a aplicação (backend + frontend em um único arquivo)
-├── requirements.txt # Dependências pip
-├── venv/            # Ambiente virtual (não commitar)
-└── chroma_db/       # Criado em runtime — apagado e recriado a cada execução
+CopyWriter/
+├── app.py              # Entry point: form → RAG → grafo → resultados → histórico
+├── config.py           # Chave de API, modelo, temperatura, caminhos
+├── backend/
+│   ├── graph.py        # LangGraph: State, nós, arestas, chains
+│   ├── llm.py          # Singleton do ChatGoogleGenerativeAI
+│   ├── rag.py          # Indexação e recuperação no ChromaDB
+│   ├── parsers.py      # force_json, extração de arquivos, normalização do carrossel
+│   └── historico.py    # Persistência em SQLite
+├── frontend/
+│   ├── ui_form.py      # Seleção de entrega + 5 abas de briefing
+│   ├── ui_results.py   # Abas de resultado por canal
+│   └── ui_historico.py # Histórico de lançamentos
+├── data/
+│   ├── templates.py    # Briefings pré-preenchidos por nicho (NÃO são prompts)
+│   └── prompts.py      # Prompts de sistema que não vivem inline em graph.py
+├── tests/              # pytest — funções puras, sem chave de API
+├── requirements.txt
+└── chroma_db/          # Criado em runtime — apagado e recriado a cada execução
 ```
 
 ---
@@ -40,11 +54,12 @@ Acesse `http://localhost:8501`.
 
 ```
 START ──┬──► analise_dores_promessas ──┐
-        ├──► analise_objecoes_quebras ──┼──► consolidador ──► adaptacao_canais ──► critico_revisor
-        └──► analise_headlines_angulos ─┘                              │
-                                                        ┌──────────────┘
-                                               "REFINAR" (até 2x) ──► adaptacao_canais
-                                               "APROVADO" ──► END
+        ├──► analise_objecoes_quebras ──┼──► consolidador ──► analise_prova_social ──► adaptacao_canais ──► critico_revisor
+        └──► analise_headlines_angulos ─┘                                                      │
+                                                                            ┌──────────────────┘
+                                                     "REFINAR" (até 2x) ────► adaptacao_canais
+                                                     content_type == "carousel" ──► geracao_carrossel ──► END
+                                                     "APROVADO" ────────────► END
 ```
 
 ### Nós e responsabilidades
@@ -55,10 +70,14 @@ START ──┬──► analise_dores_promessas ──┐
 | `analise_objecoes_quebras` | Mapeia objeções e cria quebras persuasivas | `objecoes_quebras` |
 | `analise_headlines_angulos` | Gera headlines magnéticas e ângulos criativos | `headlines_angulos` |
 | `consolidador` | Merge das 3 análises em JSON enriquecido | `contexto_enriquecido` |
+| `analise_prova_social` | Formata depoimentos, métricas e autoridade em snippets | `prova_social` |
 | `adaptacao_canais` | Gera copy para email, stories, ads e VSL | `copy_por_canal` |
 | `critico_revisor` | Aprova (`APROVADO`) ou solicita ajuste (`REFINAR:`) | `revisao_critico` |
+| `geracao_carrossel` | 5º canal opcional: slides + direção visual para o Pomelli | `copy_por_canal["carrossel"]`, `visual_suggestions` |
 
-Os 3 primeiros nós rodam em paralelo — todos têm `set_entry_point`, convergindo no `consolidador`.
+Os 3 primeiros nós rodam em paralelo a partir do `START`, convergindo no `consolidador`.
+
+O roteamento após o crítico fica em `decidir_pos_critica`, no nível do módulo (função pura, sem closure do LLM — é o que a torna testável sem chave de API).
 
 ### `AgentState` (TypedDict)
 
@@ -69,10 +88,53 @@ dores_promessas: Optional[Dict]
 objecoes_quebras: Optional[Dict]
 headlines_angulos: Optional[Dict]
 contexto_enriquecido: Optional[str]  # JSON consolidado das 3 análises
-copy_por_canal: Optional[Dict]       # Outputs finais: email, stories, ads, vsl
+prova_social: Optional[str]          # Snippets de prova social formatados
+copy_por_canal: Optional[Dict]       # Outputs finais: email, stories, ads, vsl (+ carrossel)
 revisao_critico: Optional[str]       # "APROVADO" ou "REFINAR: ..."
-tentativas_refinamento: int          # Máx: MAX_REFINEMENT_ATTEMPTS = 2
+tentativas_refinamento: int          # Máx: MAX_REFINEMENT = 2
+
+# Campos do carrossel — opcionais; o fluxo padrão nunca os informa.
+# Todo acesso a eles usa .get(), nunca indexação.
+content_type: Optional[str]          # "carousel" liga o nó geracao_carrossel
+num_slides: Optional[int]            # 5–10 (clamp_slides; default 7)
+visual_suggestions: Optional[list]   # prompts visuais achatados, derivados dos slides
 ```
+
+---
+
+## Carrossel de Instagram (ponte manual com o Google Pomelli)
+
+Canal **aditivo**: quando ligado, roda *além* dos 4 canais, uma única vez, depois da
+aprovação do crítico. O fluxo padrão percorre exatamente a mesma sequência de nós de antes.
+
+- **Prompt:** `CAROUSEL_PROMPT_TEMPLATE` em `data/prompts.py`. `num_slides` é **variável do
+  template** (`{num_slides}`), nunca f-string: `get_compiled_graph` é cacheado com
+  `@st.cache_resource` e os prompts são construídos uma vez por processo. Chaves literais
+  de JSON levam escape duplo (`{{` / `}}`).
+- **Saída:** `estilo_visual_global`, `legenda`, `hashtags` e `slides[]` com `texto_slide`
+  (pt-BR, vai na imagem) e `prompt_visual_pomelli` (inglês, direção visual).
+- **Normalização:** `normalizar_carrossel` em `parsers.py` tolera `slides` como dict,
+  `{"slide_N": {...}}` e aliases de campo; trunca o excesso e renumera. Falta de slides
+  **não** é preenchida.
+- **Ponte com o Pomelli:** `bloco_pomelli_slide` / `bloco_pomelli_completo` montam o texto;
+  a UI o expõe via `st.code`, que já traz ícone de copiar. `st.button` roda no servidor e
+  não alcança o clipboard do navegador; `pyperclip` escreveria no clipboard do host.
+- **Persistência:** o carrossel é uma chave dentro de `copy_por_canal`, então serializa em
+  `copy_json` sem alteração de schema. Registros antigos apenas não exibem a aba.
+- **Custo:** o fluxo padrão faz 9 chamadas ao LLM por execução (+4 por refinamento);
+  com carrossel, 10.
+
+---
+
+## Testes
+
+```bash
+pytest tests/ -q
+```
+
+Cobrem roteamento (`decidir_pos_critica`), compilação do grafo com LLM dublê,
+normalização do carrossel, blocos do Pomelli e serialização no histórico.
+Nenhum teste precisa de chave de API nem de runtime do Streamlit.
 
 ---
 

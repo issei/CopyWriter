@@ -40,7 +40,10 @@ st.divider()
 
 # ── Formulário de briefing ────────────────────────────────────────────────────
 briefing_dinamico = render_form()
+# Metadados de execução saem do dict antes do RAG e do histórico
 problema_principal = briefing_dinamico.pop("_problema_principal", "")
+content_type       = briefing_dinamico.pop("_content_type", "padrao")
+num_slides         = briefing_dinamico.pop("_num_slides", None)
 
 # ── Botões de ação ────────────────────────────────────────────────────────────
 st.divider()
@@ -67,20 +70,25 @@ if gerar:
         briefing=briefing_dinamico,
         contexto_rag=rag_context,
         tentativas_refinamento=0,
+        content_type=content_type,
+        num_slides=num_slides,
     )
 
-    final_copy_state = None
+    # Acumula os updates de todos os nós: com o carrossel ligado, `adaptacao_canais`
+    # deixa de ser o último a escrever `copy_por_canal`.
+    estado_final = {}
     with st.spinner("Agentes colaborando na criação da campanha..."):
         for event in get_compiled_graph().stream(initial_state):
-            if "adaptacao_canais" in event:
-                final_copy_state = event["adaptacao_canais"]
+            for payload in event.values():
+                if isinstance(payload, dict):
+                    estado_final.update(payload)
 
     st.success("✅ Execução do Grafo Concluída!")
 
-    if final_copy_state and "copy_por_canal" in final_copy_state:
-        copy = final_copy_state["copy_por_canal"]
-        revisao    = final_copy_state.get("revisao_critico", "")
-        tentativas = final_copy_state.get("tentativas_refinamento", 0)
+    if "copy_por_canal" in estado_final:
+        copy = estado_final["copy_por_canal"]
+        revisao    = estado_final.get("revisao_critico", "")
+        tentativas = estado_final.get("tentativas_refinamento", 0)
 
         st.session_state.final_copy = copy
 
