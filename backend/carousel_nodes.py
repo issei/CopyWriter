@@ -29,6 +29,10 @@ from data.prompts import CAROUSEL_VISUAL_VOCABULARY, CAROUSEL_ART_DIRECTOR_PROMP
 logger = logging.getLogger("carousel.nodes")
 
 
+# Pontuação mínima para aprovação automática (v1 §9, rubrica 0–100).
+MIN_SCORE = 60.0
+
+
 # ── 1. ingest_copy ────────────────────────────────────────────────────────────
 
 def make_ingest_copy_node():
@@ -521,12 +525,17 @@ def make_quality_gate_node(llm_factory=None):
             # Muitos slides degradados → revisão humana
             decision = "human_review"
             reason   = f"{degraded_ratio:.0%} dos slides sem asset visual"
-        elif quality_score < 60 and rev_count < max_rev:
-            decision = "revise_compose"
-            reason   = f"Score insuficiente: {quality_score:.0f}/100"
-        elif quality_score < 40:
-            decision = "human_review"
-            reason   = f"Score muito baixo após {rev_count} revisões: {quality_score:.0f}/100"
+        elif quality_score < MIN_SCORE:
+            # v1 §9: aprovação automática exige a pontuação mínima. Com o orçamento
+            # de revisões esgotado e o score ainda abaixo do mínimo, o caso vai para
+            # revisão humana — nunca para aprovado.
+            if rev_count < max_rev:
+                decision = "revise_compose"
+                reason   = f"Score insuficiente: {quality_score:.0f}/{MIN_SCORE:.0f}"
+            else:
+                decision = "human_review"
+                reason   = (f"Score {quality_score:.0f}/{MIN_SCORE:.0f} abaixo do mínimo "
+                            f"após {rev_count} revisão(ões)")
         else:
             decision = "approved"
             reason   = None
