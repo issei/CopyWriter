@@ -11,7 +11,8 @@
       "Bash(wmic cpu *)",
       "Bash(wmic path *)",
       "Bash('.\\\\venv\\\\Scripts\\\\python.exe' -c ' *)",
-      "Bash(findstr \"GEMINI_MODEL\" config.py)"
+      "Bash(findstr \"GEMINI_MODEL\" config.py)",
+      "Bash(./venv/Scripts/python.exe -m pytest -q)"
     ]
   }
 }

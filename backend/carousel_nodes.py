@@ -575,8 +575,10 @@ def make_export_package_node():
                 for s in composed
             ],
             "visual_generation": {
+                # Slide com imagem requerida = ou tem asset, ou degradou tentando.
+                # `degraded` é sempre bool, então `is not None` contava todos.
                 "total_slides_with_image_required": sum(
-                    1 for r in asset_results if r.get("degraded") is not None
+                    1 for r in asset_results if r.get("asset_path") or r.get("degraded")
                 ),
                 "successful": sum(
                     1 for r in asset_results if not r.get("degraded")

@@ -25,7 +25,7 @@ class Settings:
     text_model: str = GEMINI_MODEL
     text_model_reasoning: str = "gemini-2.5-flash"     # julgamento ambíguo
     vision_model: str = "gemini-2.5-flash"             # validação multimodal
-    image_model: str = "gemini-2.5-flash-preview-05-20"  # geração de asset visual
+    image_model: str = "gemini-2.5-flash-image"        # geração de asset visual
     temperature: float = TEMPERATURE
     embedding_model: str = EMBEDDING_MODEL
     chroma_path: str = CHROMA_PATH

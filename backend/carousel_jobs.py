@@ -142,3 +142,61 @@ def friendly_node_label(node: Optional[str]) -> str:
     if not node:
         return "Aguardando início"
     return NODE_LABELS.get(node, node)
+
+
+# ── Worker de fundo ───────────────────────────────────────────────────────────
+
+def run_carousel_job(thread_id: str, payload: dict, db_path: str, checkpoint_path: str) -> None:
+    """
+    Executa o grafo de carrossel e reflete o resultado na tabela carousel_jobs.
+
+    NUNCA chama st.* — violaria o ScriptRunContext (D9 da SPEC).
+
+    Vive aqui, e não em app.py, porque app.py é um script do Streamlit: o que
+    mora lá só é exercitável por teste com a UI inteira mockada, e foi por isso
+    que a construção errada do checkpointer passou despercebida.
+    """
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    from backend.carousel_graph import build_carousel_graph
+
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    try:
+        update_job(conn, thread_id, status="running")
+
+        # from_conn_string é um @contextmanager: sem o `with`, o que volta é um
+        # _GeneratorContextManager e compile() rejeita com TypeError.
+        with SqliteSaver.from_conn_string(checkpoint_path) as checkpointer:
+            graph = build_carousel_graph(checkpointer)
+
+            estado: dict = {}
+            for evento in graph.stream(payload, config={"configurable": {"thread_id": thread_id}}):
+                for no, update in evento.items():
+                    update_job(conn, thread_id, current_node=no)
+                    if isinstance(update, dict):
+                        estado.update(update)
+
+        # O grafo chega a END por dois caminhos: export_package (pronto) e
+        # human_review (pausado). Só o primeiro é conclusão.
+        if estado.get("quality_decision") == "human_review":
+            update_job(
+                conn, thread_id,
+                status="awaiting_approval",
+                progress_summary={
+                    "human_review_reason": estado.get("human_review_reason") or "",
+                    "quality_score": estado.get("quality_score"),
+                    "carousel_plan": estado.get("carousel_plan") or {},
+                    "output_dir": estado.get("output_dir") or payload.get("output_dir", ""),
+                },
+            )
+        else:
+            update_job(
+                conn, thread_id,
+                status="completed",
+                manifest_path=estado.get("manifest_path"),
+                progress_summary={"quality_score": estado.get("quality_score")},
+            )
+
+    except Exception as exc:
+        update_job(conn, thread_id, status="failed", error_message=str(exc)[:500])
+    finally:
+        conn.close()

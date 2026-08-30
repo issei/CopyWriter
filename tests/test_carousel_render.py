@@ -99,3 +99,16 @@ def test_empty_text_does_not_crash(base_slide):
     base_slide["texto_slide"] = ""
     img = compose_slide(base_slide, asset_path=None)
     assert img.size == (1080, 1350)
+
+
+# ── Proporção enviada à API de imagem ─────────────────────────────────────────
+
+@pytest.mark.parametrize("w,h,esperado", [
+    (1080, 1350, "4:5"),   # canvas do projeto (D1)
+    (1024, 1024, "1:1"),
+    (1920, 1080, "16:9"),
+    (1080, 1920, "9:16"),
+])
+def test_aspect_ratio_mais_proximo(w, h, esperado):
+    from backend.llm import _aspect_ratio
+    assert _aspect_ratio(w, h) == esperado

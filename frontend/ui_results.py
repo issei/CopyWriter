@@ -1,7 +1,6 @@
 """Exibição dos resultados: uma aba por canal, com download individual."""
 import json
 import os
-import time
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -256,13 +255,17 @@ def _render_carrossel(carrossel: Dict) -> None:
 
 # ── render_carousel_job_status — 3 estados de renderização ───────────────────
 
-def render_carousel_job_status(job: dict, thread_id: str) -> None:
+def render_carousel_job_status(job: dict, thread_id: str) -> bool:
     """
     Renderiza o status de um job de carrossel com 3 estados (spec v2 §6.2):
     1. Em andamento (queued/running): progresso + polling
     2. Aguardando aprovação humana (awaiting_approval): tela de aprovação
     3. Concluído (completed): grade de cards com miniaturas
     + Estado failed: mensagem segura + retry
+
+    Retorna True se o job ainda está ativo. Quem chama decide quando repetir o
+    polling: um `st.rerun()` aqui dentro abortaria o script no primeiro job,
+    escondendo os demais e o histórico logo abaixo.
     """
     status = job.get("status", "")
     short_id = thread_id[:8]
@@ -275,8 +278,7 @@ def render_carousel_job_status(job: dict, thread_id: str) -> None:
             st.markdown(f"**🔄 Carrossel Visual `{short_id}...`** — {label}")
             st.progress(0.5 if status == "running" else 0.1, text=label)
             st.caption("Atualizando em 2 segundos...")
-            time.sleep(2)
-            st.rerun()
+            return True
 
         # ── 2. Aguardando aprovação humana ─────────────────────────────────────
         elif status == "awaiting_approval":
@@ -290,20 +292,14 @@ def render_carousel_job_status(job: dict, thread_id: str) -> None:
                 with st.expander("📋 Plano Editorial Atual"):
                     st.json(progress["carousel_plan"])
 
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                if st.button("✅ Aprovar", key=f"approve_{thread_id}", type="primary"):
-                    st.info("Aprovação registrada — retomando o grafo...")
-                    # Futuro: retomar via checkpoint com mesmo thread_id
-
-            with col2:
-                revision_text = st.text_input("Instruções de revisão", key=f"rev_text_{thread_id}")
-                if st.button("🔄 Solicitar Revisão", key=f"revise_{thread_id}"):
-                    st.info(f"Revisão solicitada: {revision_text}")
-
-            with col3:
-                if st.button("❌ Cancelar", key=f"cancel_{thread_id}"):
-                    st.warning("Job cancelado.")
+            # A retomada via checkpoint ainda não existe. Botões que dizem ter
+            # feito algo sem ter feito são piores que a ausência deles.
+            st.caption(
+                "⚠️ A retomada do grafo a partir do checkpoint ainda não foi "
+                f"implementada. Os slides já compostos estão em disco "
+                f"(`{job.get('progress_summary', {}).get('output_dir', 'outputs/carrosseis')}`); "
+                "para uma nova tentativa, gere a copy novamente."
+            )
 
         # ── 3. Concluído ───────────────────────────────────────────────────────
         elif status == "completed":
@@ -381,4 +377,6 @@ def render_carousel_job_status(job: dict, thread_id: str) -> None:
 
         else:
             st.caption(f"Job `{short_id}...` — status: {status}")
+
+    return False
 

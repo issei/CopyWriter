@@ -169,6 +169,22 @@ class GeminiVisionModel:
             return {"score": 0, "feedback": response.content, "issues": []}
 
 
+# Proporções aceitas pela API de imagem. A API não recebe pixels: escolher a
+# mais próxima é o que faz `width`/`height` deixarem de ser decorativos.
+_ASPECT_RATIOS = ("1:1", "2:3", "3:4", "4:5", "5:4", "4:3", "3:2", "9:16", "16:9", "21:9")
+
+
+def _aspect_ratio(width: int, height: int) -> str:
+    """Proporção suportada mais próxima de width/height. 1080×1350 → '4:5'."""
+    alvo = width / height
+
+    def distancia(r: str) -> float:
+        a, b = r.split(":")
+        return abs(alvo - int(a) / int(b))
+
+    return min(_ASPECT_RATIOS, key=distancia)
+
+
 class GeminiImageModel:
     """
     Adaptador de ImageModel usando google.genai diretamente.
@@ -192,12 +208,21 @@ class GeminiImageModel:
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_modalities=["IMAGE"],
+                    # Sem isto a API devolve 1:1 e o compositor recorta um quadrado
+                    # para 4:5, jogando fora metade do enquadramento.
+                    image_config=types.ImageConfig(aspect_ratio=_aspect_ratio(width, height)),
                 ),
             )
-            for parte in resposta.candidates[0].content.parts:
+            # Candidato bloqueado (safety, recitation) vem com content=None: sem
+            # guarda isso vira AttributeError e mascara o motivo real.
+            candidato = (resposta.candidates or [None])[0]
+            partes = getattr(getattr(candidato, "content", None), "parts", None) or []
+            for parte in partes:
                 if parte.inline_data:
                     return parte.inline_data.data
-            raise RuntimeError("resposta sem imagem")
+            raise RuntimeError(
+                f"resposta sem imagem (finish_reason={getattr(candidato, 'finish_reason', None)})"
+            )
         except Exception as exc:
             msg = str(exc)
             if "429" in msg or "RESOURCE_EXHAUSTED" in msg:

@@ -18,7 +18,7 @@ from backend.graph import get_compiled_graph, AgentState
 from backend.parsers import podar
 from backend.rag import setup_rag
 from backend.carousel_jobs import (
-    init_carousel_jobs_table, create_job, update_job, get_job, friendly_node_label,
+    init_carousel_jobs_table, create_job, get_job, run_carousel_job, friendly_node_label,
 )
 from frontend.ui_form import render_toolbar, render_form
 from frontend.ui_results import render_results, render_carousel_job_status
@@ -27,13 +27,23 @@ from frontend.ui_historico import render_historico
 # ── Inicialização ─────────────────────────────────────────────────────────────
 hist.init_db()
 
-# Conexão SQLite compartilhada: check_same_thread=False obrigatório (D9)
-_db_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-_db_conn.row_factory = sqlite3.Row
-init_carousel_jobs_table(_db_conn)
+# O Streamlit reexecuta este script inteiro a cada interação — e o poller de job
+# faz isso a cada 2s. Sem @st.cache_resource, cada rerun abriria uma conexão e um
+# executor novos, nenhum deles fechado.
 
-# Executor dedicado para workers de carrossel
-_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="carousel_worker")
+@st.cache_resource
+def _get_db_conn() -> sqlite3.Connection:
+    """Conexão SQLite compartilhada: check_same_thread=False obrigatório (D9)."""
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    init_carousel_jobs_table(conn)
+    return conn
+
+
+@st.cache_resource
+def _get_executor() -> ThreadPoolExecutor:
+    """Executor dedicado para workers de carrossel."""
+    return ThreadPoolExecutor(max_workers=2, thread_name_prefix="carousel_worker")
 
 if "final_copy" not in st.session_state:
     st.session_state.final_copy = None
@@ -53,51 +63,20 @@ def start_carousel_job(payload: dict) -> str:
     Cria um job, despacha o worker de fundo e retorna o thread_id.
     O worker nunca chama st.* — apenas escreve na tabela carousel_jobs.
     """
-    thread_id = create_job(_db_conn)
-    _executor.submit(_run_carousel_graph_background, thread_id, payload)
-    return thread_id
-
-
-def _run_carousel_graph_background(thread_id: str, payload: dict) -> None:
-    """
-    Worker de fundo: executa o grafo de carrossel e atualiza a tabela.
-    NUNCA chama nenhuma função st.* — violaria o ScriptRunContext (D9).
-    """
-    import sqlite3 as _sqlite3
     from config import get_settings
-    from backend.carousel_graph import build_carousel_graph
 
-    settings = get_settings()
-    # Conexão própria do thread (necessário: check_same_thread=False)
-    conn = _sqlite3.connect(settings.db_path, check_same_thread=False)
-
-    try:
-        update_job(conn, thread_id, status="running")
-
-        # Checkpointer SQLite dedicado para o carrossel
-        try:
-            from langgraph.checkpoint.sqlite import SqliteSaver
-            checkpointer = SqliteSaver.from_conn_string(settings.carousel_checkpoints)
-        except Exception:
-            checkpointer = None   # sem checkpointer em ambiente sem suporte
-
-        graph = build_carousel_graph(checkpointer)
-
-        for evento in graph.stream(payload, config={"configurable": {"thread_id": thread_id}}):
-            for no in evento:
-                update_job(conn, thread_id, current_node=no)
-
-        update_job(conn, thread_id, status="completed")
-
-    except Exception as exc:
-        update_job(conn, thread_id, status="failed", error_message=str(exc)[:500])
-    finally:
-        conn.close()
+    settings  = get_settings()
+    thread_id = create_job(_get_db_conn())
+    _get_executor().submit(
+        run_carousel_job, thread_id, payload,
+        settings.db_path, settings.carousel_checkpoints,
+    )
+    return thread_id
 
 
 def get_carousel_job_status(thread_id: str) -> dict | None:
     """Consulta o status de um job de carrossel."""
-    return get_job(_db_conn, thread_id)
+    return get_job(_get_db_conn(), thread_id)
 
 
 # ── Cabeçalho ─────────────────────────────────────────────────────────────────
@@ -190,11 +169,21 @@ if gerar:
         # ── Disparar job de carrossel visual (pós-crítico, se aprovado) ───────
         carrossel_copy = copy.get("carrossel", {})
         if carrossel_copy and carrossel_copy.get("slides"):
+            # O formulário não tem seção de marca; o produtor é o único dado de
+            # autoria que existe. Sem ele o cabeçalho de autoria não é desenhado.
+            _bl = briefing_limpo.get("briefing_lancamento", {})
+            _produtor = _bl.get("infoproduto", {}).get("produtor", "")
+
             carousel_payload = {
                 "copy": "\n\n".join(
                     s.get("texto_slide", "") for s in carrossel_copy.get("slides", [])
                 ),
-                "brand": briefing_limpo.get("briefing_lancamento", {}).get("marca", {}),
+                "brand": {
+                    "name": _produtor,
+                    "handle": _produtor.lower().replace(" ", ""),
+                    "verified": False,
+                    "voice": _bl.get("posicionamento", {}).get("tom_de_voz", ""),
+                } if _produtor else {},
                 "slides": {
                     "min": 5, "max": 10,
                     "preferred": len(carrossel_copy.get("slides", [])),
@@ -224,15 +213,22 @@ if st.session_state.final_copy:
     render_results(st.session_state.final_copy)
 
 # ── Status dos jobs de carrossel visual ──────────────────────────────────────
+_algum_job_ativo = False
 if st.session_state.carousel_thread_ids:
     st.divider()
     st.subheader("🎠 Jobs de Carrossel Visual")
     for tid in list(st.session_state.carousel_thread_ids):
         job = get_carousel_job_status(tid)
         if job:
-            render_carousel_job_status(job, tid)
+            _algum_job_ativo |= render_carousel_job_status(job, tid)
 
 # ── Histórico ─────────────────────────────────────────────────────────────────
 st.divider()
 render_historico()
+
+# O polling fica no fim: com o rerun dentro do laço de jobs, o script morria no
+# primeiro job em andamento e nem os demais nem o histórico chegavam a renderizar.
+if _algum_job_ativo:
+    time.sleep(2)
+    st.rerun()
 
