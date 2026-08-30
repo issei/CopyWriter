@@ -1,0 +1,32 @@
+{
+  "generated_at": "2026-08-30T01:35:45.543521+00:00",
+  "total_slides": 1,
+  "quality_score": 42.0,
+  "slides": [
+    {
+      "slide_id": 0,
+      "file_path": "outputs\\carrosseis\\slide_00.png",
+      "degraded": false
+    }
+  ],
+  "visual_generation": {
+    "total_slides_with_image_required": 1,
+    "successful": 1,
+    "degraded": 0,
+    "degraded_details": []
+  },
+  "content_validation": {
+    "score": 50,
+    "issues": [
+      "Validação indisponível"
+    ],
+    "critical_failures": []
+  },
+  "visual_validation": {
+    "score": 30.0,
+    "warnings": [],
+    "issues": [],
+    "degraded_ratio": 0.0
+  },
+  "rewrite_log": []
+}

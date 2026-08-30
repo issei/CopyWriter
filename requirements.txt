@@ -3,7 +3,6 @@ langgraph
 langchain
 langchain-core
 langchain-google-genai
-google-generativeai
 chromadb
 langchain-community
 langchain-chroma
@@ -12,3 +11,5 @@ python-dotenv
 pypdf
 python-docx
 pytest
+langgraph-checkpoint-sqlite
+pillow

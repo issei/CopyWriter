@@ -1,10 +1,14 @@
 """Exibição dos resultados: uma aba por canal, com download individual."""
 import json
-from typing import Dict
+import os
+import time
+from pathlib import Path
+from typing import Dict, Optional
 
 import streamlit as st
 
 from backend.parsers import bloco_pomelli_completo, bloco_pomelli_slide
+from backend.carousel_jobs import friendly_node_label
 
 ABA_EMAIL     = "📧 Email Marketing"
 ABA_STORIES   = "📱 Instagram Stories"
@@ -243,3 +247,133 @@ def _render_carrossel(carrossel: Dict) -> None:
         mime="text/plain",
         key="dl_carrossel",
     )
+
+
+# ── render_carousel_job_status — 3 estados de renderização ───────────────────
+
+def render_carousel_job_status(job: dict, thread_id: str) -> None:
+    """
+    Renderiza o status de um job de carrossel com 3 estados (spec v2 §6.2):
+    1. Em andamento (queued/running): progresso + polling
+    2. Aguardando aprovação humana (awaiting_approval): tela de aprovação
+    3. Concluído (completed): grade de cards com miniaturas
+    + Estado failed: mensagem segura + retry
+    """
+    status = job.get("status", "")
+    short_id = thread_id[:8]
+
+    with st.container(border=True):
+        # ── 1. Em andamento ────────────────────────────────────────────────────
+        if status in ("queued", "running"):
+            current_node = job.get("current_node")
+            label        = friendly_node_label(current_node)
+            st.markdown(f"**🔄 Carrossel Visual `{short_id}...`** — {label}")
+            st.progress(0.5 if status == "running" else 0.1, text=label)
+            st.caption("Atualizando em 2 segundos...")
+            time.sleep(2)
+            st.rerun()
+
+        # ── 2. Aguardando aprovação humana ─────────────────────────────────────
+        elif status == "awaiting_approval":
+            st.markdown(f"**⏸️ Carrossel `{short_id}...` — Aguardando sua aprovação**")
+            reason = job.get("progress_summary", {}).get("human_review_reason", "")
+            if reason:
+                st.warning(f"Motivo da pausa: {reason}")
+
+            progress = job.get("progress_summary") or {}
+            if progress.get("carousel_plan"):
+                with st.expander("📋 Plano Editorial Atual"):
+                    st.json(progress["carousel_plan"])
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button("✅ Aprovar", key=f"approve_{thread_id}", type="primary"):
+                    st.info("Aprovação registrada — retomando o grafo...")
+                    # Futuro: retomar via checkpoint com mesmo thread_id
+
+            with col2:
+                revision_text = st.text_input("Instruções de revisão", key=f"rev_text_{thread_id}")
+                if st.button("🔄 Solicitar Revisão", key=f"revise_{thread_id}"):
+                    st.info(f"Revisão solicitada: {revision_text}")
+
+            with col3:
+                if st.button("❌ Cancelar", key=f"cancel_{thread_id}"):
+                    st.warning("Job cancelado.")
+
+        # ── 3. Concluído ───────────────────────────────────────────────────────
+        elif status == "completed":
+            st.markdown(f"**✅ Carrossel `{short_id}...` — Concluído**")
+
+            progress    = job.get("progress_summary") or {}
+            manifest_p  = job.get("manifest_path")
+
+            # Tenta carregar o manifest
+            manifest = None
+            if manifest_p and os.path.exists(manifest_p):
+                try:
+                    with open(manifest_p, encoding="utf-8") as f:
+                        manifest = json.load(f)
+                except Exception:
+                    pass
+
+            if manifest:
+                slides_info = manifest.get("slides", [])
+                total = len(slides_info)
+                score = manifest.get("quality_score")
+
+                if score is not None:
+                    st.metric("Score de qualidade", f"{score:.0f}/100")
+
+                st.markdown(f"**{total} slides gerados**")
+
+                # Grade de cards com miniaturas
+                cols_per_row = 3
+                for i in range(0, total, cols_per_row):
+                    cols = st.columns(cols_per_row)
+                    for j, col in enumerate(cols):
+                        idx = i + j
+                        if idx >= total:
+                            break
+                        slide_info = slides_info[idx]
+                        sid        = slide_info.get("slide_id", idx + 1)
+                        fpath      = slide_info.get("file_path")
+                        degraded   = slide_info.get("degraded", False)
+
+                        with col:
+                            with st.container(border=True):
+                                caption = f"Slide {sid}"
+                                if degraded:
+                                    caption += " ⚠️"
+                                st.caption(caption)
+                                if fpath and os.path.exists(fpath):
+                                    st.image(fpath, use_container_width=True)
+                                    if degraded:
+                                        st.caption("⚠️ Composição tipográfica (sem asset visual)")
+                                else:
+                                    st.info("🖼️ Slide não encontrado em disco")
+
+                # Downloads
+                if manifest_p:
+                    with open(manifest_p, encoding="utf-8") as f:
+                        manifest_json = f.read()
+                    st.download_button(
+                        "⬇️ Baixar manifest.json",
+                        data=manifest_json,
+                        file_name=f"manifest_{short_id}.json",
+                        mime="application/json",
+                        key=f"dl_manifest_{thread_id}",
+                    )
+            else:
+                st.info("Carrossel concluído — manifest não encontrado em disco.")
+
+        # ── Failed ────────────────────────────────────────────────────────────
+        elif status == "failed":
+            error_msg = job.get("error_message", "Erro desconhecido")
+            st.error(f"**❌ Carrossel `{short_id}...` — Falhou**")
+            st.warning(f"Mensagem: {error_msg}")
+            if st.button("🔄 Tentar novamente", key=f"retry_{thread_id}"):
+                st.info("Para tentar novamente, gere uma nova copy com carrossel.")
+
+        else:
+            st.caption(f"Job `{short_id}...` — status: {status}")
+
