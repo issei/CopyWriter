@@ -37,8 +37,8 @@ def render_historico() -> None:
                         ps  = bl.get("prova_social", {})
                         datas = est.get("datas_chave", {})
 
-                        # O modo de entrega não é salvo em coluna própria:
-                        # é inferido da copy, que já carrega o carrossel.
+                        # O número de slides não tem coluna própria: é inferido da
+                        # copy salva. O modo de entrega vem dos canais do briefing.
                         slides_carrossel = (
                             (dados["copy"].get("carrossel") or {}).get("slides", [])
                             if isinstance(dados["copy"], dict) else []
@@ -56,17 +56,17 @@ def render_historico() -> None:
                             "objecoes_comuns":       "\n".join(pub.get("objecoes_comuns", [])),
                             "diferencial_competitivo": pos.get("diferencial_competitivo", ""),
                             "tom_de_voz":            pos.get("tom_de_voz", ""),
-                            "gatilhos_mentais":      ", ".join(pos.get("gatilhos_mentais", [])),
+                            # Multiselects recebem lista; juntar em string zeraria o default.
+                            "gatilhos_mentais":      list(pos.get("gatilhos_mentais", [])),
                             "tipo_lancamento":       est.get("tipo_lancamento", ""),
                             "meta_campanha":         est.get("meta_campanha", ""),
                             "ini_campanha":          datas.get("inicio_campanha", ""),
                             "abert_carrinho":        datas.get("abertura_carrinho", ""),
                             "fech_carrinho":         datas.get("fechamento_carrinho", ""),
-                            "canais":                ", ".join(est.get("canais", [])),
+                            "canais":                list(est.get("canais", [])),
                             "autoridade_produtor":   ps.get("autoridade_produtor", ""),
                             "depoimentos":           ps.get("depoimentos", ""),
                             "metricas":              ps.get("metricas", ""),
-                            "content_type":          "carousel" if slides_carrossel else "padrao",
                             "num_slides":            len(slides_carrossel) or 7,
                         }
                         st.session_state.final_copy = dados["copy"]

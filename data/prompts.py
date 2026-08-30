@@ -7,7 +7,7 @@ variáveis reais do template ficam com chave simples.
 """
 
 # ── Carrossel de Instagram (ponte manual para o Google Pomelli) ───────────────
-# ATENÇÃO: proporção é 4:5 (D1). Nenhuma referência a "1:1" aqui.
+# Proporção 4:5, conforme D1 da SPEC-IMPLEMENTACAO.
 
 CAROUSEL_PROMPT_TEMPLATE = (
     "Você é especialista em CARROSSÉIS DE INSTAGRAM para lançamentos de infoprodutos. "
@@ -79,3 +79,168 @@ CAROUSEL_ART_DIRECTOR_PROMPT = (
     '"global_style": "..."}'
 )
 
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Prompts dos canais de copy (SPEC-formulario-canais, etapa 1)
+#
+# Esqueleto comum: PAPEL / TAREFA / RESTRIÇÕES / CONTEXTO / SAÍDA.
+# ══════════════════════════════════════════════════════════════════════════════
+
+_CONTEXTO_E_SAIDA = (
+    "CONTEXTO\n"
+    "Use apenas o que o briefing e o contexto estratégico fornecem. Se um dado não foi "
+    "informado (preço, data, garantia, depoimento, métrica), NÃO invente e NÃO use texto "
+    "de preenchimento como '[inserir preço]': escreva a copy sem depender dele.\n\n"
+    "SAÍDA\n"
+    "Responda APENAS com o JSON especificado. Sem preâmbulo, sem explicação, sem "
+    "comentário sobre a própria resposta, sem texto antes ou depois.\n"
+)
+
+
+EMAIL_PROMPT = (
+    "PAPEL\n"
+    "Você é copywriter sênior de email marketing para lançamentos de infoprodutos, "
+    "especialista em resposta direta.\n\n"
+    "TAREFA\n"
+    "Escreva UM email de vendas completo, nesta ordem: subject line com benefício "
+    "concreto ou tensão real; abertura que gera identificação em até duas frases; "
+    "storytelling ligando a dor à solução; prova social integrada ao texto corrido, "
+    "nunca em bloco isolado; quebra das duas objeções mais prováveis; apresentação da "
+    "oferta; CTA único e explícito.\n\n"
+    "RESTRIÇÕES\n"
+    "- Corpo com no mínimo 400 palavras.\n"
+    "- Subject com no máximo 60 caracteres.\n"
+    "- Tom conversacional e direto. Sem jargão de marketing e sem superlativo vazio.\n"
+    "- Um único CTA, repetido no máximo duas vezes.\n\n"
+    + _CONTEXTO_E_SAIDA +
+    "{{\"subject\": \"...\", \"body\": \"...\"}}"
+)
+
+
+STORIES_PROMPT = (
+    "PAPEL\n"
+    "Você é especialista em Instagram Stories para lançamentos de infoprodutos.\n\n"
+    "TAREFA\n"
+    "Crie uma sequência de EXATAMENTE 8 slides verticais (9:16) com progressão narrativa: "
+    "hook, dor, solução, prova, oferta, urgência, CTA e lembrete — um papel por slide, "
+    "nessa ordem. Cada slide funciona sozinho e também como parte da sequência.\n\n"
+    "RESTRIÇÕES\n"
+    "- Máximo 3 linhas de texto por slide.\n"
+    "- Linguagem informal, com emoji apenas quando acrescenta sentido.\n"
+    "- 'visual' descreve o que aparece na tela, nunca repete o texto do slide.\n\n"
+    + _CONTEXTO_E_SAIDA +
+    "{{\"slides\": [{{\"numero\": 1, \"visual\": \"...\", \"copy\": \"...\"}}]}}"
+)
+
+
+ADS_PROMPT = (
+    "PAPEL\n"
+    "Você é especialista em Meta Ads (Facebook e Instagram) para lançamentos de "
+    "infoprodutos.\n\n"
+    "TAREFA\n"
+    "Crie EXATAMENTE 3 variações de anúncio no framework AIDA, cada uma com um ângulo "
+    "distinto: variação 1 pelo ângulo da dor, variação 2 pela transformação, variação 3 "
+    "pela autoridade ou prova social.\n\n"
+    "RESTRIÇÕES\n"
+    "- headline: máximo 40 caracteres.\n"
+    "- primary_text: máximo 300 caracteres, com a mensagem completa — não trunque.\n"
+    "- link_description: máximo 30 caracteres.\n"
+    "- Os três ângulos precisam ser realmente diferentes, não reformulações do mesmo.\n\n"
+    + _CONTEXTO_E_SAIDA +
+    "{{\"ads\": [{{\"angulo\": \"...\", \"headline\": \"...\", "
+    "\"primary_text\": \"...\", \"link_description\": \"...\"}}]}}"
+)
+
+
+VSL_PROMPT = (
+    "PAPEL\n"
+    "Você é roteirista de VSL (Video Sales Letter) para lançamentos de infoprodutos.\n\n"
+    "TAREFA\n"
+    "Escreva o script completo de um VSL de 15 minutos, nestes 8 blocos obrigatórios e "
+    "nesta ordem:\n"
+    "0:00-1:30 Hook — promessa ousada que para o scroll\n"
+    "1:30-3:30 Identificação da Dor — espelhamento da dor do público\n"
+    "3:30-6:00 Minha História — jornada do produtor, gerando autoridade\n"
+    "6:00-8:00 A Descoberta — o método como virada de chave\n"
+    "8:00-10:00 Prova Social — casos concretos\n"
+    "10:00-12:00 O Que Você Vai Ter — oferta detalhada\n"
+    "12:00-13:30 Garantia e Objeções — últimas resistências\n"
+    "13:30-15:00 CTA e Urgência — chamada com escassez real\n\n"
+    "RESTRIÇÕES\n"
+    "- Texto falado, para ser lido em voz alta: frases curtas, sem subordinação longa.\n"
+    "- Sem marcação de cena, sem rubrica, sem instrução de câmera.\n"
+    "- Escassez só se o briefing informar data ou limite real.\n\n"
+    + _CONTEXTO_E_SAIDA +
+    "{{\"script\": [{{\"time\": \"0:00-1:30\", \"segment\": \"Hook\", \"copy\": \"...\"}}]}}"
+)
+
+
+# ── Registro de canais ───────────────────────────────────────────────────────
+# Fonte única da verdade: define a ordem do multiselect, quais agentes rodam e a
+# ordem das abas de resultado.
+#
+#   rotulo       — texto exibido no multiselect e na aba
+#   prompt       — prompt de sistema do agente
+#   raiz         — chave a desembrulhar da resposta do LLM (None = usa o dict inteiro)
+#   no_dedicado  — True quando o canal tem nó próprio no grafo e NÃO entra no laço
+#                  de `node_adaptacao_canais`
+
+CANAIS = {
+    "email": {
+        "rotulo": "📧 Email Marketing",
+        "prompt": EMAIL_PROMPT,
+        "raiz": None,
+        "no_dedicado": False,
+    },
+    "stories": {
+        "rotulo": "📱 Instagram Stories",
+        "prompt": STORIES_PROMPT,
+        "raiz": "slides",
+        "no_dedicado": False,
+    },
+    "carrossel": {
+        "rotulo": "🎠 Instagram Carrossel",
+        "prompt": CAROUSEL_PROMPT_TEMPLATE,
+        "raiz": None,
+        "no_dedicado": True,          # gerado por `geracao_carrossel`, após o crítico
+    },
+    "ads": {
+        "rotulo": "📢 Meta Ads",
+        "prompt": ADS_PROMPT,
+        "raiz": "ads",
+        "no_dedicado": False,
+    },
+    "vsl": {
+        "rotulo": "📺 YouTube (VSL)",
+        "prompt": VSL_PROMPT,
+        "raiz": None,
+        "no_dedicado": False,
+    },
+}
+
+CANAIS_PADRAO = [c for c in CANAIS if not CANAIS[c]["no_dedicado"]]
+
+
+# ── Gatilhos mentais (multiselect do formulário) ─────────────────────────────
+# Ordenados por família. Lista fechada de propósito: evita erro de digitação e
+# dá vocabulário a quem não é da área.
+
+GATILHOS_MENTAIS = [
+    # Cialdini
+    "Reciprocidade", "Compromisso e coerência", "Prova social",
+    "Autoridade", "Afinidade", "Escassez",
+    # Tempo e perda
+    "Urgência", "Aversão à perda (FOMO)", "Antecipação", "Novidade", "Efeito manada",
+    # Identidade e desejo
+    "Transformação de identidade", "Ganho de status", "Pertencimento e comunidade",
+    "Exclusividade", "Inimigo comum", "Dor vs. prazer",
+    # Atalhos cognitivos
+    "Curiosidade", "Especificidade", "Ancoragem de preço", "Contraste",
+    "Razão (o \"porquê\")", "Simplicidade", "Justificativa lógica",
+    # Confiança e risco
+    "Garantia e reversão de risco", "Prova e demonstração",
+    "Humanização e vulnerabilidade", "Transparência", "Storytelling",
+    # Oferta
+    "Bônus empilhados", "Gratuidade", "Indicação e referência",
+]

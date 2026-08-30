@@ -18,7 +18,7 @@ from langgraph.graph import StateGraph, START, END
 from backend.llm import get_llm
 from backend.parsers import clamp_slides, force_json, normalizar_carrossel
 from config import MAX_REFINEMENT
-from data.prompts import CAROUSEL_PROMPT_TEMPLATE
+from data.prompts import CANAIS, CANAIS_PADRAO
 
 
 # ── Estado ────────────────────────────────────────────────────────────────────
@@ -38,6 +38,7 @@ class AgentState(TypedDict):
     content_type: Optional[str]          # "carousel" liga o nó geracao_carrossel
     num_slides: Optional[int]            # 5–10; só o carrossel usa
     visual_suggestions: Optional[list]   # prompts visuais achatados, derivados dos slides
+    canais: Optional[list]               # chaves de CANAIS selecionadas; ausente = todos
 
 
 # ── Roteamento (puro — sem closure do LLM, testável isoladamente) ─────────────
@@ -59,6 +60,13 @@ def decidir_pos_critica(state: AgentState) -> str:
     if not houve_erro and state.get("content_type") == "carousel":
         return "carrossel"
     return "end"
+
+
+def tem_prova_social(state: AgentState) -> str:
+    """Pula o agente de prova social quando não há nenhum dado para ele formatar."""
+    ps = state.get("briefing", {}).get("briefing_lancamento", {}).get("prova_social", {})
+    preenchido = any(str(v).strip() for v in ps.values()) if isinstance(ps, dict) else False
+    return "com_prova" if preenchido else "sem_prova"
 
 
 # ── Grafo compilado (singleton por sessão) ────────────────────────────────────
@@ -113,77 +121,30 @@ def get_compiled_graph():
         )),
     ]) | llm
 
-    # ── Chains especializadas por canal (calibração de tom) ───────────────────
+    # ── Chains por canal, montadas a partir do registro ───────────────────────
+    # Uma chain por entrada de CANAIS: o prompt e o desembrulho da resposta vêm
+    # do registro, não de blocos copiados aqui.
 
-    chain_email = ChatPromptTemplate.from_messages([
-        ("system", BASE + (
-            " Você é especialista em EMAIL MARKETING para lançamentos. "
-            "Escreva um email de vendas completo com: subject line irresistível (urgência + benefício), "
-            "abertura que gera identificação imediata, storytelling que conecta dor à solução, "
-            "prova social integrada organicamente, quebra das principais objeções, "
-            "apresentação da oferta com valor percebido alto, e CTA claro e urgente. "
-            "Tom: conversacional mas direto. Extensão: mínimo 400 palavras. "
-            "JSON: {{\"subject\": \"...\", \"body\": \"...\"}}"
-        )),
-        ("human", _canal_prompt()),
-    ]) | llm
-
-    chain_stories = ChatPromptTemplate.from_messages([
-        ("system", BASE + (
-            " Você é especialista em INSTAGRAM STORIES para lançamentos. "
-            "Crie uma sequência de exatamente 8 slides otimizados para Stories (formato vertical 9:16). "
-            "Regras: texto curto (máx 3 linhas por slide), linguagem informal com emojis estratégicos, "
-            "progressão narrativa (hook → dor → solução → prova → oferta → urgência → CTA → lembrete), "
-            "cada slide deve funcionar de forma autônoma mas também como parte da sequência. "
-            "JSON: {{\"slides\": [{{\"numero\": 1, \"visual\": \"descrição do visual sugerido\", \"copy\": \"texto do slide\"}}]}}"
-        )),
-        ("human", _canal_prompt()),
-    ]) | llm
-
-    chain_ads = ChatPromptTemplate.from_messages([
-        ("system", BASE + (
-            " Você é especialista em META ADS (Facebook/Instagram) para lançamentos. "
-            "Crie 3 variações de anúncio seguindo o framework AIDA, cada uma com ângulo diferente: "
-            "variação 1 (ângulo dor), variação 2 (ângulo transformação), variação 3 (ângulo autoridade/prova). "
-            "Restrições: headline máx 40 chars, primary_text máx 300 chars (sem truncar a mensagem), "
-            "link_description máx 30 chars. "
-            "JSON: {{\"ads\": [{{\"angulo\": \"...\", \"headline\": \"...\", \"primary_text\": \"...\", \"link_description\": \"...\"}}]}}"
-        )),
-        ("human", _canal_prompt()),
-    ]) | llm
-
-    chain_vsl = ChatPromptTemplate.from_messages([
-        ("system", BASE + (
-            " Você é especialista em VSL (Video Sales Letter) para lançamentos de infoprodutos. "
-            "Escreva o script completo de um VSL de 15 minutos com arco narrativo em blocos obrigatórios: "
-            "Hook (0:00-1:30) — promessa ousada que para o scroll, "
-            "Identificação da Dor (1:30-3:30) — espelhamento profundo da dor, "
-            "Minha História (3:30-6:00) — jornada do produtor gerando autoridade, "
-            "A Descoberta (6:00-8:00) — o método como virada de chave, "
-            "Prova Social (8:00-10:00) — casos de sucesso específicos, "
-            "O Que Você Vai Ter (10:00-12:00) — oferta detalhada com bônus, "
-            "Garantia e Objeções (12:00-13:30) — quebra das últimas resistências, "
-            "CTA e Urgência (13:30-15:00) — chamada para ação com escassez real. "
-            "JSON: {{\"script\": [{{\"time\": \"0:00-1:30\", \"segment\": \"Hook\", \"copy\": \"...\"}}]}}"
-        )),
-        ("human", _canal_prompt()),
-    ]) | llm
+    chains_canal = {
+        nome: ChatPromptTemplate.from_messages([
+            ("system", cfg["prompt"]),
+            ("human", _canal_prompt()),
+        ]) | llm
+        for nome, cfg in CANAIS.items()
+    }
 
     # ── Chain do carrossel (5º canal, opcional) ───────────────────────────────
     # num_slides entra como variável do template: get_compiled_graph é cacheado
     # com @st.cache_resource e o prompt é construído uma única vez por processo.
 
-    chain_carrossel = ChatPromptTemplate.from_messages([
-        ("system", CAROUSEL_PROMPT_TEMPLATE),
-        ("human", _canal_prompt()),
-    ]) | llm
+    chain_carrossel = chains_canal["carrossel"]
 
     # ── Chain do crítico ──────────────────────────────────────────────────────
 
     chain_critico = ChatPromptTemplate.from_messages([
         ("system", (
             "Você é um DIRETOR CRIATIVO sênior, extremamente exigente, com 20 anos em marketing de resposta direta. "
-            "Avalie cada canal (email, stories, ads, vsl) em 3 critérios: "
+            "Avalie cada canal ({canais}) em 3 critérios: "
             "clareza da proposta de valor, força emocional e especificidade (sem generalismos). "
             "Se TODOS os canais estiverem excelentes, responda APENAS a palavra 'APROVADO'. "
             "Caso contrário, responda 'REFINAR:' seguido de pontos numerados e acionáveis por canal."
@@ -290,47 +251,51 @@ def get_compiled_graph():
             "revisao_critico":     state.get("revisao_critico") or "Primeira versão — sem feedback anterior.",
         }
 
+    def _canais_selecionados(state: AgentState) -> list:
+        """Canais padrão pedidos pelo usuário. Ausente = todos (histórico antigo)."""
+        pedidos = state.get("canais")
+        if not pedidos:
+            return list(CANAIS_PADRAO)
+        return [c for c in CANAIS_PADRAO if c in pedidos]
+
     def node_adaptacao_canais(state: AgentState) -> Dict[str, Any]:
         tentativa = state.get("tentativas_refinamento", 0) + 1
-        st.write(f"🔄 *Adaptação por Canal:* gerando copy especializada para cada canal (tentativa {tentativa})...")
+        selecionados = _canais_selecionados(state)
+        st.write(
+            f"🔄 *Adaptação por Canal:* gerando copy para {len(selecionados)} canal(is) "
+            f"(tentativa {tentativa})..."
+        )
 
         contexto = state.get("contexto_enriquecido", "{}")
         try:
             if "error" in json.loads(contexto):
-                return {"copy_por_canal": {"error": "Contexto inválido."}, "tentativas_refinamento": tentativa}
+                return {"copy_por_canal": {"error": "Contexto inválido."},
+                        "tentativas_refinamento": tentativa}
         except (json.JSONDecodeError, TypeError):
             pass
 
         inp = _canal_input(state)
-        # delay de 2s entre chamadas para respeitar o RPM do free tier
-        email_raw   = safe_invoke(chain_email,   inp, "Email")
-        time.sleep(2)
-        stories_raw = safe_invoke(chain_stories, inp, "Stories")
-        time.sleep(2)
-        ads_raw     = safe_invoke(chain_ads,     inp, "Ads")
-        time.sleep(2)
-        vsl_raw     = safe_invoke(chain_vsl,     inp, "VSL")
+        copy = {}
+        for i, canal in enumerate(selecionados):
+            if i:
+                time.sleep(2)   # espaçamento de RPM do free tier
+            bruto = force_json(safe_invoke(chains_canal[canal], inp, canal))
+            raiz = CANAIS[canal]["raiz"]
+            copy[canal] = bruto.get(raiz, bruto) if raiz else bruto
 
-        email   = force_json(email_raw)
-        stories = force_json(stories_raw)
-        ads     = force_json(ads_raw)
-        vsl     = force_json(vsl_raw)
-
-        copy = {
-            "email":   email,
-            "stories": stories.get("slides", stories),
-            "ads":     ads.get("ads", [ads] if "headline" in ads else []),
-            "vsl":     vsl,
-        }
         return {"copy_por_canal": copy, "tentativas_refinamento": tentativa}
 
     def node_critico_revisor(state: AgentState) -> Dict[str, Any]:
         st.write("🔄 *Crítico Revisor:* auditando qualidade e coerência estratégica...")
-        copy = state.get("copy_por_canal", {})
+        copy = state.get("copy_por_canal") or {}
+        if not copy:
+            # só o carrossel foi pedido: não há o que criticar, e uma chamada é poupada
+            return {"revisao_critico": "APROVADO"}
         if "error" in copy:
             return {"revisao_critico": "ERRO_NA_GERACAO"}
         r = safe_invoke(chain_critico, {
             "briefing":       _b(state),
+            "canais":         ", ".join(copy.keys()),
             "copy_por_canal": json.dumps(copy, ensure_ascii=False),
         }, "Crítico")
         st.info(f"💬 **Crítico:** {r.content}")
@@ -374,7 +339,12 @@ def get_compiled_graph():
     graph.add_edge("analise_dores_promessas",   "consolidador")
     graph.add_edge("analise_objecoes_quebras",  "consolidador")
     graph.add_edge("analise_headlines_angulos", "consolidador")
-    graph.add_edge("consolidador",              "analise_prova_social")
+    # Sem nenhum dado de prova social, o nó é pulado — 1 chamada ao LLM poupada.
+    graph.add_conditional_edges(
+        "consolidador",
+        tem_prova_social,
+        {"com_prova": "analise_prova_social", "sem_prova": "adaptacao_canais"},
+    )
     graph.add_edge("analise_prova_social",      "adaptacao_canais")
     graph.add_edge("adaptacao_canais",          "critico_revisor")
 

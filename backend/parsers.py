@@ -6,6 +6,26 @@ from typing import Any, Dict
 from langchain_core.prompts import ChatPromptTemplate
 
 
+# ── Poda de campos vazios ────────────────────────────────────────────────────
+
+def podar(valor: Any) -> Any:
+    """
+    Remove recursivamente strings vazias, None, listas e dicts vazios.
+
+    O briefing é serializado em TODA chamada ao LLM; campos em branco viram ruído
+    (`""`, `null`) que o modelo tenta interpretar. Zero e False são preservados.
+    """
+    if isinstance(valor, dict):
+        limpo = {k: podar(v) for k, v in valor.items()}
+        return {k: v for k, v in limpo.items() if v not in ("", None, [], {})}
+    if isinstance(valor, list):
+        itens = [podar(v) for v in valor]
+        return [v for v in itens if v not in ("", None, [], {})]
+    if isinstance(valor, str):
+        return valor.strip()
+    return valor
+
+
 # ── JSON do LLM ──────────────────────────────────────────────────────────────
 
 def force_json(llm_output: Any) -> Dict:
@@ -43,7 +63,7 @@ def force_json(llm_output: Any) -> Dict:
 # ── Briefing → texto para RAG ────────────────────────────────────────────────
 
 def canonicalize_briefing(briefing_dict: Dict) -> str:
-    """Converte dicionário de briefing em texto estruturado para indexação."""
+    """Converte o briefing em texto estruturado para indexação, omitindo o que está vazio."""
     b   = briefing_dict.get("briefing_lancamento", {})
     inf = b.get("infoproduto", {})
     pub = b.get("publico_alvo", {})
@@ -51,28 +71,36 @@ def canonicalize_briefing(briefing_dict: Dict) -> str:
     est = b.get("estrategia_lancamento", {})
     ps  = b.get("prova_social", {})
 
-    linhas = [
-        "# Briefing de Lançamento",
-        f"Nome: {inf.get('nome','')} | Produtor: {inf.get('produtor','')}",
-        f"Preço: R$ {inf.get('preco','')} | Formato: {inf.get('formato','')}",
-        f"Descrição: {inf.get('descricao','')}",
-        f"\nDor principal: {pub.get('problema_principal','')}",
-        f"Transformação: {pub.get('transformacao_principal','')}",
-        f"Perfil: {pub.get('demografia','')}",
-    ]
+    linhas = ["# Briefing de Lançamento"]
+
+    def add(rotulo: str, valor) -> None:
+        """Acrescenta a linha apenas quando há valor."""
+        if isinstance(valor, list):
+            valor = ", ".join(str(v) for v in valor if str(v).strip())
+        if valor is None or not str(valor).strip():
+            return
+        linhas.append(f"{rotulo}: {valor}")
+
+    add("Nome", inf.get("nome"))
+    add("Produtor", inf.get("produtor"))
+    add("Preço", f"R$ {inf.get('preco')}" if inf.get("preco") else None)
+    add("Formato", inf.get("formato"))
+    add("Descrição", inf.get("descricao"))
+    add("Dor principal", pub.get("problema_principal"))
+    add("Transformação", pub.get("transformacao_principal"))
+    add("Perfil", pub.get("demografia"))
     for o in pub.get("objecoes_comuns", []):
-        linhas.append(f"- Objeção: {o}")
-    linhas.extend([
-        f"\nUSP: {pos.get('diferencial_competitivo','')}",
-        f"Tom de voz: {pos.get('tom_de_voz','')}",
-        "Gatilhos: " + ", ".join(pos.get("gatilhos_mentais", [])),
-        f"\nLançamento: {est.get('tipo_lancamento','')} | Meta: {est.get('meta_campanha','')}",
-        "Canais: " + ", ".join(est.get("canais", [])),
-    ])
-    if ps.get("autoridade_produtor"):
-        linhas.append(f"\nAutoridade: {ps['autoridade_produtor']}")
-    if ps.get("metricas"):
-        linhas.append(f"Métricas: {ps['metricas']}")
+        add("Objeção", o)
+    add("USP", pos.get("diferencial_competitivo"))
+    add("Tom de voz", pos.get("tom_de_voz"))
+    add("Gatilhos", pos.get("gatilhos_mentais"))
+    add("Lançamento", est.get("tipo_lancamento"))
+    add("Meta", est.get("meta_campanha"))
+    add("Canais", est.get("canais"))
+    add("Autoridade", ps.get("autoridade_produtor"))
+    add("Depoimentos", ps.get("depoimentos"))
+    add("Métricas", ps.get("metricas"))
+
     return "\n".join(linhas)
 
 

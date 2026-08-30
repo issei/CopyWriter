@@ -22,15 +22,22 @@ CopyWriter/
 │   ├── graph.py        # LangGraph: State, nós, arestas, chains
 │   ├── llm.py          # Singleton do ChatGoogleGenerativeAI
 │   ├── rag.py          # Indexação e recuperação no ChromaDB
-│   ├── parsers.py      # force_json, extração de arquivos, normalização do carrossel
-│   └── historico.py    # Persistência em SQLite
+│   ├── parsers.py      # force_json, poda de vazios, normalização do carrossel
+│   ├── historico.py    # Persistência em SQLite
+│   ├── carousel_graph.py     # 2º grafo, isolado — pipeline visual do carrossel
+│   ├── carousel_state.py     # Estado tipado do pipeline visual
+│   ├── carousel_nodes.py     # Os 11 nós (plan, art_director, quality_gate…)
+│   ├── carousel_jobs.py      # Jobs assíncronos e status em SQLite
+│   ├── carousel_resilience.py# Retry com backoff para rate limit
+│   └── carousel_render/      # Compositor determinístico (tokens, tipografia, componentes)
 ├── frontend/
 │   ├── ui_form.py      # Seleção de entrega + 5 abas de briefing
 │   ├── ui_results.py   # Abas de resultado por canal
 │   └── ui_historico.py # Histórico de lançamentos
+├── assets/fonts/       # DM Serif Display e Inter — asset de runtime do compositor
 ├── data/
 │   ├── templates.py    # Briefings pré-preenchidos por nicho (NÃO são prompts)
-│   └── prompts.py      # Prompts de sistema que não vivem inline em graph.py
+│   └── prompts.py      # Prompts dos canais, registro CANAIS e GATILHOS_MENTAIS
 ├── tests/              # pytest — funções puras, sem chave de API
 ├── requirements.txt
 └── chroma_db/          # Criado em runtime — apagado e recriado a cada execução
@@ -75,6 +82,12 @@ START ──┬──► analise_dores_promessas ──┐
 | `critico_revisor` | Aprova (`APROVADO`) ou solicita ajuste (`REFINAR:`) | `revisao_critico` |
 | `geracao_carrossel` | 5º canal opcional: slides + direção visual para o Pomelli | `copy_por_canal["carrossel"]`, `visual_suggestions` |
 
+**Canais seletivos.** `adaptacao_canais` itera o registro `CANAIS` de `data/prompts.py`, gerando **apenas os canais selecionados** no formulário — canal não escolhido não vira chamada ao LLM. O registro é fonte única para o multiselect, para quais agentes rodam e para as abas de resultado.
+
+**Prova social condicional.** Sem nenhum dado de prova social no briefing, uma aresta condicional em `consolidador` pula `analise_prova_social` direto para `adaptacao_canais`, poupando 1 chamada.
+
+**Poda de vazios.** `parsers.podar()` remove strings vazias, `None` e coleções vazias do briefing antes do RAG e do grafo — campos em branco não viram ruído em toda chamada.
+
 Os 3 primeiros nós rodam em paralelo a partir do `START`, convergindo no `consolidador`.
 
 O roteamento após o crítico fica em `decidir_pos_critica`, no nível do módulo (função pura, sem closure do LLM — é o que a torna testável sem chave de API).
@@ -99,6 +112,25 @@ content_type: Optional[str]          # "carousel" liga o nó geracao_carrossel
 num_slides: Optional[int]            # 5–10 (clamp_slides; default 7)
 visual_suggestions: Optional[list]   # prompts visuais achatados, derivados dos slides
 ```
+
+---
+
+## Pipeline visual do carrossel (2º grafo, isolado)
+
+`backend/carousel_graph.py` é um `StateGraph` **independente**: não importa `backend/graph.py`, e vice-versa. A copy já aprovada pelo crítico é repassada por `app.py` como entrada — nunca por acoplamento de estado.
+
+```
+copy_por_canal["carrossel"]  →  app.py  →  ingest_copy → analyze_copy → plan_carousel
+  → art_director → prompt_designer → generate_visual_assets → compose_slides
+  → content_validator + visual_validator → quality_gate → export_package
+```
+
+- **Canvas 4:5 (1080×1350)**, com escala tipográfica derivada do container de leitura da identidade (fator 1,278) e arredondada ao grid de 8 px.
+- **Camadas separadas:** a API de imagem gera fotografia e textura; o compositor determinístico desenha texto exato, tokens, grifos, checklists e divisores. Texto literal nunca é renderizado pelo modelo de imagem.
+- **Degradação:** falha de imagem nunca interrompe o grafo — o slide vira composição puramente tipográfica e a ocorrência é registrada no manifest.
+- **Assíncrono:** o worker roda em `ThreadPoolExecutor` e **nunca chama API do Streamlit** (thread de fundo perde o `ScriptRunContext`); ele só escreve em `carousel_jobs`, e a UI faz polling com `st.rerun()`.
+
+Especificações em `docs/`: `SPEC-IMPLEMENTACAO.md` é autoritativa e resolve as contradições entre o metaprompt v1, o v2, a identidade visual e a `SPEC-formulario-canais.md`.
 
 ---
 

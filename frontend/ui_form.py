@@ -9,9 +9,7 @@ import streamlit as st
 from backend.llm import get_llm
 from backend.parsers import clamp_slides, extrair_texto_de_arquivo, extrair_campos_de_texto
 from data.templates import TEMPLATES
-
-MODO_PADRAO    = "Copy padrão (4 canais)"
-MODO_CARROSSEL = "Copy padrão + Carrossel"
+from data.prompts import CANAIS, GATILHOS_MENTAIS
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -79,40 +77,6 @@ def render_form() -> Dict:
     quem chama deve removê-las com `pop` antes de passar o dict adiante, para
     não poluir o RAG (`canonicalize_briefing`) nem o histórico.
     """
-    # ── Tipo de entrega (escolha de execução, não dado de briefing) ───────────
-    st.subheader("🎯 O que gerar")
-    c_modo, c_slides = st.columns([3, 2])
-
-    with c_modo:
-        modo = st.radio(
-            "Tipo de entrega",
-            [MODO_PADRAO, MODO_CARROSSEL],
-            index=1 if _v("content_type", "padrao") == "carousel" else 0,
-            horizontal=True,
-            label_visibility="collapsed",
-        )
-
-    quer_carrossel = modo == MODO_CARROSSEL
-    num_slides = None
-    with c_slides:
-        if quer_carrossel:
-            num_slides = st.slider(
-                "Número de slides",
-                min_value=5, max_value=10,
-                value=clamp_slides(_v("num_slides", 7)),
-                help="Meta enviada ao modelo. Slides em excesso são descartados; "
-                     "se vierem menos, o carrossel é exibido como veio.",
-            )
-
-    if quer_carrossel:
-        st.caption(
-            "O carrossel é gerado **além** dos 4 canais, a partir da copy já aprovada "
-            "pelo crítico. Cada slide sai com o texto da imagem e uma direção visual "
-            "em inglês para colar no Google Pomelli."
-        )
-
-    st.write("")
-
     t1, t2, t3, t4, t5 = st.tabs([
         "📦 O Infoproduto",
         "👥 Público-Alvo",
@@ -126,31 +90,31 @@ def render_form() -> Dict:
         st.subheader("Dados do Produto")
         c1, c2 = st.columns(2)
         with c1:
-            nome_produto = st.text_input("Nome do Infoproduto",    value=_v("nome_produto", "Mentoria de Desenvolvimento Inteligente"))
-            produtor     = st.text_input("Nome do Produtor",       value=_v("produtor",     "Mauricio Issei"))
-            preco        = st.number_input("Preço (R$)",           value=float(_v("preco", 2997.0)), step=100.0)
+            nome_produto = st.text_input("Nome do Infoproduto",    value=_v("nome_produto", ""))
+            produtor     = st.text_input("Nome do Produtor",       value=_v("produtor", ""))
+            preco        = st.number_input("Preço (R$)",           value=_v("preco", None), step=100.0)
         with c2:
-            formato  = st.text_input("Formato do Produto",   value=_v("formato",  "Mentoria com aulas ao vivo + comunidade"))
-            descricao = st.text_area("Descrição do Produto", value=_v("descricao", "Mentoria para desenvolvedores que querem dominar arquitetura de software e design patterns."), height=130)
+            formato  = st.text_input("Formato do Produto",   value=_v("formato", ""))
+            descricao = st.text_area("Descrição do Produto", value=_v("descricao", ""), height=130)
 
     # ── Aba 2: Público-Alvo ───────────────────────────────────────────────────
     with t2:
         st.subheader("Persona e Dores")
         demografia = st.text_area(
             "Perfil do Público",
-            value=_v("demografia", "Desenvolvedores Full-Stack, 25-45 anos, 3+ anos de experiência, R$ 5k-20k/mês."),
+            value=_v("demografia", ""),
         )
         problema_principal = st.text_area(
             "Dor Principal",
-            value=_v("problema_principal", "Estou estagnado tecnicamente, não acompanho as melhores práticas e tenho dificuldade em arquitetar soluções escaláveis."),
+            value=_v("problema_principal", ""),
         )
         transformacao_principal = st.text_area(
             "Transformação Prometida",
-            value=_v("transformacao_principal", "Dominar arquitetura de software, ser um dev procurado e aumentar o salário em 50%."),
+            value=_v("transformacao_principal", ""),
         )
         objecoes_texto = st.text_area(
             "Objeções (uma por linha)",
-            value=_v("objecoes_comuns", "Não tenho tempo\nJá fiz cursos que não funcionaram\nO preço é alto"),
+            value=_v("objecoes_comuns", ""),
             height=100,
         )
         objecoes_comuns = _split_list(objecoes_texto)
@@ -160,34 +124,44 @@ def render_form() -> Dict:
         st.subheader("Posicionamento")
         diferencial = st.text_area(
             "USP / Diferencial Competitivo",
-            value=_v("diferencial_competitivo", "A única mentoria com foco em arquitetura de software real + comunidade de devs sênior."),
+            value=_v("diferencial_competitivo", ""),
         )
         tom_de_voz = st.text_input(
             "Tom de Voz",
-            value=_v("tom_de_voz", "Direto, sem BS, prático, baseado em casos reais."),
+            value=_v("tom_de_voz", ""),
         )
-        gatilhos_texto = st.text_input(
-            "Gatilhos Mentais (separados por vírgula)",
-            value=_v("gatilhos_mentais", "Escassez, Autoridade, Comunidade, Transformação de identidade"),
+        gatilhos_mentais = st.multiselect(
+            "Gatilhos Mentais",
+            options=GATILHOS_MENTAIS,
+            default=[g for g in _v("gatilhos_mentais", []) if g in GATILHOS_MENTAIS],
+            help="Opcional. Orienta o tom da copy em todos os canais.",
         )
-        gatilhos_mentais = _split_csv(gatilhos_texto)
 
     # ── Aba 4: Estratégia ─────────────────────────────────────────────────────
     with t4:
         st.subheader("Estratégia de Lançamento")
         c1, c2 = st.columns(2)
         with c1:
-            tipo_lancamento = st.text_input("Tipo de Lançamento", value=_v("tipo_lancamento", "VSL + Sequência de email"))
-            meta_campanha   = st.text_input("Meta",               value=_v("meta_campanha",   "Vender 50 mentorias a R$ 2.997"))
+            tipo_lancamento = st.text_input("Tipo de Lançamento", value=_v("tipo_lancamento", ""))
+            meta_campanha   = st.text_input("Meta",               value=_v("meta_campanha", ""))
         with c2:
-            ini_campanha  = st.text_input("Início da Campanha",      value=_v("ini_campanha",  "2026-06-01"))
-            abert_carrinho = st.text_input("Abertura do Carrinho",   value=_v("abert_carrinho", "2026-06-05"))
-            fech_carrinho  = st.text_input("Fechamento do Carrinho", value=_v("fech_carrinho",  "2026-06-07"))
-        canais_texto = st.text_input(
-            "Canais (vírgula)",
-            value=_v("canais", "Email Marketing, Meta Ads, Instagram Stories, YouTube (VSL)"),
+            ini_campanha  = st.text_input("Início da Campanha",      value=_v("ini_campanha", ""))
+            abert_carrinho = st.text_input("Abertura do Carrinho",   value=_v("abert_carrinho", ""))
+            fech_carrinho  = st.text_input("Fechamento do Carrinho", value=_v("fech_carrinho", ""))
+        canais = st.multiselect(
+            "Canais",
+            options=list(CANAIS.keys()),
+            format_func=lambda c: CANAIS[c]["rotulo"],
+            default=[c for c in _v("canais", []) if c in CANAIS],
+            help="Cada canal tem um agente especializado. Só os selecionados são gerados.",
         )
-        canais = _split_csv(canais_texto)
+        num_slides = None
+        if "carrossel" in canais:
+            num_slides = st.slider(
+                "Número de slides do carrossel",
+                min_value=5, max_value=10,
+                value=clamp_slides(_v("num_slides", 7)),
+            )
 
     # ── Aba 5: Prova Social (nova skill) ──────────────────────────────────────
     with t5:
@@ -198,20 +172,17 @@ def render_form() -> Dict:
         )
         autoridade_produtor = st.text_area(
             "Autoridade do Produtor",
-            value=_v("autoridade_produtor", "20+ anos desenvolvendo software, ex-CTO de 3 startups, mentor de +500 devs."),
+            value=_v("autoridade_produtor", ""),
             height=80,
         )
         depoimentos_texto = st.text_area(
             "Depoimentos de Alunos (um por linha: Nome: Resultado obtido)",
-            value=_v("depoimentos", (
-                "Carlos Silva: Em 3 meses passei de dev pleno para sênior e aumentei meu salário em 40%.\n"
-                "Mariana Costa: Aprendi a arquitetar sistemas que antes eram impossíveis para mim."
-            )),
+            value=_v("depoimentos", ""),
             height=120,
         )
         metricas = st.text_area(
             "Métricas e Resultados (dados quantitativos)",
-            value=_v("metricas", "+500 devs mentorados, 92% de aprovação nos desafios técnicos, média de aumento salarial de 35%"),
+            value=_v("metricas", ""),
             height=80,
         )
 
@@ -249,7 +220,6 @@ def render_form() -> Dict:
                 "metricas": metricas,
             },
         },
-        "_problema_principal": problema_principal,          # atalho para o RAG
-        "_content_type": "carousel" if quer_carrossel else "padrao",
+        "_problema_principal": problema_principal,   # atalho para o RAG
         "_num_slides": num_slides,
     }

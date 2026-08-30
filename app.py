@@ -15,6 +15,7 @@ os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
 
 import backend.historico as hist
 from backend.graph import get_compiled_graph, AgentState
+from backend.parsers import podar
 from backend.rag import setup_rag
 from backend.carousel_jobs import (
     init_carousel_jobs_table, create_job, update_job, get_job, friendly_node_label,
@@ -116,34 +117,54 @@ st.divider()
 briefing_dinamico = render_form()
 # Metadados de execução saem do dict antes do RAG e do histórico
 problema_principal = briefing_dinamico.pop("_problema_principal", "")
-content_type       = briefing_dinamico.pop("_content_type", "padrao")
 num_slides         = briefing_dinamico.pop("_num_slides", None)
+
+# Os canais selecionados decidem quais agentes rodam; o carrossel é derivado deles.
+canais = (briefing_dinamico.get("briefing_lancamento", {})
+          .get("estrategia_lancamento", {}).get("canais", []))
+content_type = "carousel" if "carrossel" in canais else "padrao"
 
 # ── Botões de ação ────────────────────────────────────────────────────────────
 st.divider()
+
+# Com tudo opcional, dois campos ainda são indispensáveis: sem canal não há o que
+# gerar, e sem a dor principal o RAG não tem query de recuperação.
+_faltando = []
+if not canais:
+    _faltando.append("selecione ao menos um canal")
+if not problema_principal.strip():
+    _faltando.append("preencha a dor principal")
+
 col_btn, col_clear = st.columns([4, 1])
 with col_btn:
     gerar = st.button(
         "🚀 Iniciar Inteligência de Grafo e Gerar Copy",
         type="primary",
         use_container_width=True,
+        disabled=bool(_faltando),
     )
 with col_clear:
     if st.button("🗑️ Limpar", use_container_width=True):
         st.session_state.final_copy = None
         st.rerun()
+if _faltando:
+    st.caption("⚠️ Para gerar: " + " · ".join(_faltando) + ".")
 
 # ── Execução do grafo ─────────────────────────────────────────────────────────
 if gerar:
     st.subheader("⚙️ Execução do Grafo em Tempo Real")
 
+    # Campos em branco não chegam aos agentes: viram ruído em toda chamada.
+    briefing_limpo = podar(briefing_dinamico)
+
     with st.spinner("Indexando briefing no RAG local..."):
-        rag_context = setup_rag(briefing_dinamico, problema_principal)
+        rag_context = setup_rag(briefing_limpo, problema_principal)
 
     initial_state = AgentState(
-        briefing=briefing_dinamico,
+        briefing=briefing_limpo,
         contexto_rag=rag_context,
         tentativas_refinamento=0,
+        canais=canais,
         content_type=content_type,
         num_slides=num_slides,
     )
@@ -173,7 +194,7 @@ if gerar:
                 "copy": "\n\n".join(
                     s.get("texto_slide", "") for s in carrossel_copy.get("slides", [])
                 ),
-                "brand": briefing_dinamico.get("briefing_lancamento", {}).get("marca", {}),
+                "brand": briefing_limpo.get("briefing_lancamento", {}).get("marca", {}),
                 "slides": {
                     "min": 5, "max": 10,
                     "preferred": len(carrossel_copy.get("slides", [])),
@@ -193,7 +214,7 @@ if gerar:
 
         # Salva no histórico somente se a geração foi bem-sucedida
         if "error" not in copy:
-            hist.salvar(briefing_dinamico, copy, revisao, tentativas)
+            hist.salvar(briefing_limpo, copy, revisao, tentativas)
     else:
         st.error("Não foi possível recuperar o estado final das copys.")
 

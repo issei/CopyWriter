@@ -7,14 +7,17 @@ from typing import Dict, Optional
 
 import streamlit as st
 
+from data.prompts import CANAIS
+
 from backend.parsers import bloco_pomelli_completo, bloco_pomelli_slide
 from backend.carousel_jobs import friendly_node_label
 
-ABA_EMAIL     = "📧 Email Marketing"
-ABA_STORIES   = "📱 Instagram Stories"
-ABA_CARROSSEL = "🎠 Carrossel"
-ABA_VSL       = "📺 YouTube (VSL)"
-ABA_ADS       = "📢 Meta Ads"
+# Rótulos vêm do registro de canais: uma fonte só para multiselect, abas e agentes.
+ABA_EMAIL     = CANAIS["email"]["rotulo"]
+ABA_STORIES   = CANAIS["stories"]["rotulo"]
+ABA_CARROSSEL = CANAIS["carrossel"]["rotulo"]
+ABA_VSL       = CANAIS["vsl"]["rotulo"]
+ABA_ADS       = CANAIS["ads"]["rotulo"]
 ABA_JSON      = "📄 JSON Completo"
 
 
@@ -29,66 +32,66 @@ def render_results(final_copy: Dict) -> None:
             st.code(final_copy.get("raw_content", "sem conteúdo"), language="text")
         return
 
-    # Acesso nominal às abas: a do carrossel é condicional e entra no meio da
-    # lista, o que quebraria o desempacotamento posicional.
-    nomes = [ABA_EMAIL, ABA_STORIES]
-    if final_copy.get("carrossel"):
-        nomes.append(ABA_CARROSSEL)
-    nomes += [ABA_VSL, ABA_ADS, ABA_JSON]
+    # As abas saem de copy_por_canal: só aparece o canal que foi realmente gerado.
+    # A ordem é a do registro.
+    presentes = [c for c in CANAIS if final_copy.get(c)]
+    nomes = [CANAIS[c]["rotulo"] for c in presentes] + [ABA_JSON]
     tabs = dict(zip(nomes, st.tabs(nomes)))
 
     # ── Email ─────────────────────────────────────────────────────────────────
-    with tabs[ABA_EMAIL]:
-        email = final_copy.get("email", {})
-        subject = email.get("subject", email.get("assunto", ""))
-        body    = email.get("body",    email.get("corpo",   ""))
+    if ABA_EMAIL in tabs:
+        with tabs[ABA_EMAIL]:
+            email = final_copy.get("email", {})
+            subject = email.get("subject", email.get("assunto", ""))
+            body    = email.get("body",    email.get("corpo",   ""))
 
-        st.subheader(f"✉️ {subject}" if subject else "✉️ Email Marketing")
-        st.text_area("Corpo", body, height=420, disabled=True, key="email_body_view")
+            st.subheader(f"✉️ {subject}" if subject else "✉️ Email Marketing")
+            st.text_area("Corpo", body, height=420, disabled=True, key="email_body_view")
 
-        txt = f"ASSUNTO:\n{subject}\n\n{'─'*60}\n\n{body}"
-        st.download_button("⬇️ Baixar Email (.txt)", data=txt,
-                           file_name="email_marketing.txt", mime="text/plain")
+            txt = f"ASSUNTO:\n{subject}\n\n{'─'*60}\n\n{body}"
+            st.download_button("⬇️ Baixar Email (.txt)", data=txt,
+                               file_name="email_marketing.txt", mime="text/plain")
 
     # ── Stories ───────────────────────────────────────────────────────────────
-    with tabs[ABA_STORIES]:
-        slides = final_copy.get("stories", [])
-        # normaliza: aceita lista de dicts com ou sem chave slide_N
-        if isinstance(slides, dict):
-            slides = list(slides.values())
+    if ABA_STORIES in tabs:
+        with tabs[ABA_STORIES]:
+            slides = final_copy.get("stories", [])
+            # normaliza: aceita lista de dicts com ou sem chave slide_N
+            if isinstance(slides, dict):
+                slides = list(slides.values())
 
-        if not slides:
-            st.info("Nenhum slide gerado.")
-        else:
-            txt_lines = []
-            cols_per_row = 2
-            for i in range(0, len(slides), cols_per_row):
-                cols = st.columns(cols_per_row)
-                for j, col in enumerate(cols):
-                    idx = i + j
-                    if idx >= len(slides):
-                        break
-                    slide = slides[idx]
-                    if not isinstance(slide, dict):
-                        continue
-                    # suporta {slide_N: {visual, copy}} e {visual, copy} direto
-                    inner_key = f"slide_{idx+1}"
-                    data = slide.get(inner_key, slide)
-                    visual = data.get("visual", data.get("imagem", ""))
-                    copy   = data.get("copy",   data.get("texto",  ""))
-                    with col:
-                        with st.container(border=True):
-                            st.caption(f"**Slide {idx+1}**")
-                            st.info(f"🎬 {visual}")
-                            st.write(copy)
-                    txt_lines.append(f"SLIDE {idx+1}\nVisual: {visual}\nTexto: {copy}\n")
+            if not slides:
+                st.info("Nenhum slide gerado.")
+            else:
+                txt_lines = []
+                cols_per_row = 2
+                for i in range(0, len(slides), cols_per_row):
+                    cols = st.columns(cols_per_row)
+                    for j, col in enumerate(cols):
+                        idx = i + j
+                        if idx >= len(slides):
+                            break
+                        slide = slides[idx]
+                        if not isinstance(slide, dict):
+                            continue
+                        # suporta {slide_N: {visual, copy}} e {visual, copy} direto
+                        inner_key = f"slide_{idx+1}"
+                        data = slide.get(inner_key, slide)
+                        visual = data.get("visual", data.get("imagem", ""))
+                        copy   = data.get("copy",   data.get("texto",  ""))
+                        with col:
+                            with st.container(border=True):
+                                st.caption(f"**Slide {idx+1}**")
+                                st.info(f"🎬 {visual}")
+                                st.write(copy)
+                        txt_lines.append(f"SLIDE {idx+1}\nVisual: {visual}\nTexto: {copy}\n")
 
-            st.download_button(
-                "⬇️ Baixar Stories (.txt)",
-                data="\n".join(txt_lines),
-                file_name="instagram_stories.txt",
-                mime="text/plain",
-            )
+                st.download_button(
+                    "⬇️ Baixar Stories (.txt)",
+                    data="\n".join(txt_lines),
+                    file_name="instagram_stories.txt",
+                    mime="text/plain",
+                )
 
     # ── Carrossel (ponte manual com o Google Pomelli) ─────────────────────────
     if ABA_CARROSSEL in tabs:
@@ -96,69 +99,71 @@ def render_results(final_copy: Dict) -> None:
             _render_carrossel(final_copy["carrossel"])
 
     # ── VSL ───────────────────────────────────────────────────────────────────
-    with tabs[ABA_VSL]:
-        vsl = final_copy.get("vsl", {})
-        blocks = vsl.get("script", []) if isinstance(vsl, dict) else []
+    if ABA_VSL in tabs:
+        with tabs[ABA_VSL]:
+            vsl = final_copy.get("vsl", {})
+            blocks = vsl.get("script", []) if isinstance(vsl, dict) else []
 
-        if not blocks:
-            st.info("Nenhum script VSL gerado.")
-        else:
-            vsl_lines = []
-            for b in blocks:
-                tm  = b.get("time", "")
-                seg = b.get("segment", "")
-                cp  = b.get("copy", "")
-                with st.expander(f"⏱️ **{tm}** — {seg}"):
-                    st.write(cp)
-                vsl_lines.append(f"[{tm}] {seg}\n{cp}\n")
+            if not blocks:
+                st.info("Nenhum script VSL gerado.")
+            else:
+                vsl_lines = []
+                for b in blocks:
+                    tm  = b.get("time", "")
+                    seg = b.get("segment", "")
+                    cp  = b.get("copy", "")
+                    with st.expander(f"⏱️ **{tm}** — {seg}"):
+                        st.write(cp)
+                    vsl_lines.append(f"[{tm}] {seg}\n{cp}\n")
 
-            st.download_button(
-                "⬇️ Baixar Script VSL (.txt)",
-                data="\n".join(vsl_lines),
-                file_name="script_vsl.txt",
-                mime="text/plain",
-            )
-
-    # ── Meta Ads ──────────────────────────────────────────────────────────────
-    with tabs[ABA_ADS]:
-        ads = final_copy.get("ads", [])
-        if isinstance(ads, dict):
-            ads = [ads]
-
-        if not ads:
-            st.info("Nenhum anúncio gerado.")
-        else:
-            ads_lines = []
-            for i, ad in enumerate(ads):
-                angulo   = ad.get("angulo", f"Variação {i+1}")
-                headline = ad.get("headline", "")
-                primary  = ad.get("primary_text", ad.get("texto_principal", ""))
-                link     = ad.get("link_description", ad.get("descricao_link", ""))
-
-                with st.container(border=True):
-                    st.markdown(f"#### 🎯 {angulo}")
-                    c1, c2, c3 = st.columns([2, 4, 2])
-                    with c1:
-                        st.metric("Headline", "")
-                        st.write(headline)
-                    with c2:
-                        st.metric("Primary Text", "")
-                        st.write(primary)
-                    with c3:
-                        st.metric("Link Description", "")
-                        st.write(link)
-
-                ads_lines.append(
-                    f"VARIAÇÃO {i+1} — {angulo}\n"
-                    f"Headline: {headline}\nTexto: {primary}\nLink: {link}\n"
+                st.download_button(
+                    "⬇️ Baixar Script VSL (.txt)",
+                    data="\n".join(vsl_lines),
+                    file_name="script_vsl.txt",
+                    mime="text/plain",
                 )
 
-            st.download_button(
-                "⬇️ Baixar Anúncios (.txt)",
-                data="\n".join(ads_lines),
-                file_name="meta_ads.txt",
-                mime="text/plain",
-            )
+    # ── Meta Ads ──────────────────────────────────────────────────────────────
+    if ABA_ADS in tabs:
+        with tabs[ABA_ADS]:
+            ads = final_copy.get("ads", [])
+            if isinstance(ads, dict):
+                ads = [ads]
+
+            if not ads:
+                st.info("Nenhum anúncio gerado.")
+            else:
+                ads_lines = []
+                for i, ad in enumerate(ads):
+                    angulo   = ad.get("angulo", f"Variação {i+1}")
+                    headline = ad.get("headline", "")
+                    primary  = ad.get("primary_text", ad.get("texto_principal", ""))
+                    link     = ad.get("link_description", ad.get("descricao_link", ""))
+
+                    with st.container(border=True):
+                        st.markdown(f"#### 🎯 {angulo}")
+                        c1, c2, c3 = st.columns([2, 4, 2])
+                        with c1:
+                            st.metric("Headline", "")
+                            st.write(headline)
+                        with c2:
+                            st.metric("Primary Text", "")
+                            st.write(primary)
+                        with c3:
+                            st.metric("Link Description", "")
+                            st.write(link)
+
+                    ads_lines.append(
+                        f"VARIAÇÃO {i+1} — {angulo}\n"
+                        f"Headline: {headline}\nTexto: {primary}\nLink: {link}\n"
+                    )
+
+                st.download_button(
+                    "⬇️ Baixar Anúncios (.txt)",
+                    data="\n".join(ads_lines),
+                    file_name="meta_ads.txt",
+                    mime="text/plain",
+                )
 
     # ── JSON Completo ─────────────────────────────────────────────────────────
     with tabs[ABA_JSON]:
